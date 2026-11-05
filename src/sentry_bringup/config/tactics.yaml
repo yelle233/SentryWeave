@@ -1,0 +1,40 @@
+# Synthetic 20 m x 12 m test arena. Replace with surveyed season geometry.
+schema_version: 1
+site: synthetic_demo
+frame: map
+self_id: 7
+bounds: [0.0, 0.0, 20.0, 12.0]
+robot_radius: 0.32
+# Rectangles represent physical obstacles OR rule-prohibited areas.
+obstacles:
+  - [9.0, 4.5, 11.0, 7.5]
+weights: [0.22, 0.24, 0.28, 0.12, 0.10, 0.04]
+parameters:
+  observed_age: 0.3
+  predicted_age: 0.9
+  self_timeout: 0.5
+  referee_timeout: 2.0
+  min_hold: 3.0
+  switch_margin: 0.08
+  confirm_cycles: 3
+  cooldown: 5.0
+  task_lease: 2.0
+  intent_threshold: 0.35
+  critical_hp: 0.25
+  recovered_hp: 0.7
+  urgent_threat: 0.72
+  supply_enabled: true
+zones:
+  - {id: own_base, center: [2.0, 6.0], radius: 3.0, intent: DEFEND_BASE, importance: 1.0}
+  - {id: enemy_outpost, center: [18.0, 6.0], radius: 3.5, intent: ATTACK_OUTPOST, importance: 0.9}
+  - {id: center, center: [10.0, 2.0], radius: 2.5, intent: CONTEST_AREA, importance: 0.65}
+  - {id: recovery, center: [2.0, 2.0], radius: 1.4, intent: RETREAT, importance: 0.7}
+points:
+  - {id: defense_south, zone: own_base, xy: [4.0, 4.0], yaw: 0.0, tasks: [DEFEND, INTERCEPT]}
+  - {id: defense_north, zone: own_base, xy: [4.0, 8.0], yaw: 0.0, tasks: [DEFEND, INTERCEPT]}
+  - {id: choke_south, zone: own_base, xy: [7.0, 4.0], yaw: 0.0, tasks: [INTERCEPT]}
+  - {id: choke_north, zone: own_base, xy: [7.0, 8.0], yaw: 0.0, tasks: [INTERCEPT]}
+  - {id: support_south, zone: enemy_outpost, xy: [15.0, 4.0], yaw: 0.0, tasks: [SUPPORT]}
+  - {id: support_north, zone: enemy_outpost, xy: [15.0, 8.0], yaw: 0.0, tasks: [SUPPORT]}
+  - {id: contest_south, zone: center, xy: [10.0, 2.0], yaw: 0.0, tasks: [SUPPORT]}
+  - {id: supply, zone: recovery, xy: [2.0, 2.0], yaw: 0.0, tasks: [RECOVER]}

@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4" main_tree_to_execute="Navigate">
+  <BehaviorTree ID="Navigate">
+    <RecoveryNode number_of_retries="3" name="BoundedNavigationRecovery">
+      <PipelineSequence>
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="PlanRecovery">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"
+                               error_code_id="{compute_path_error_code}"/>
+            <ClearEntireCostmap service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="ControlRecovery">
+          <FollowPath path="{path}" controller_id="FollowPath" goal_checker_id="goal_checker"
+                      error_code_id="{follow_path_error_code}"/>
+          <ClearEntireCostmap service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback>
+        <GoalUpdated/>
+        <Sequence>
+          <ClearEntireCostmap service_name="local_costmap/clear_entirely_local_costmap"/>
+          <ClearEntireCostmap service_name="global_costmap/clear_entirely_global_costmap"/>
+          <Wait wait_duration="1.0"/>
+        </Sequence>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

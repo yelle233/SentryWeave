@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="arena">
+    <physics name="physics" type="ignored">
+      <max_step_size>0.002</max_step_size><real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <light type="directional" name="sun">
+      <pose>10 6 10 0 0 0</pose><diffuse>0.9 0.9 0.9 1</diffuse>
+      <direction>-0.3 -0.2 -1</direction><cast_shadows>false</cast_shadows>
+    </light>
+    <model name="ground">
+      <static>true</static>
+      <link name="ground"><pose>10 6 -0.05 0 0 0</pose>
+        <collision name="ground"><geometry><box><size>22 14 0.1</size></box></geometry></collision>
+        <visual name="ground_visual"><geometry><box><size>22 14 0.1</size></box></geometry>
+          <material><ambient>0.5 0.55 0.5 1</ambient><diffuse>0.5 0.55 0.5 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="central_obstacle">
+      <static>true</static><pose>10 6 0.8 0 0 0</pose>
+      <link name="obstacle">
+        <collision name="box"><geometry><box><size>2 3 1.6</size></box></geometry></collision>
+        <visual name="box_visual"><geometry><box><size>2 3 1.6</size></box></geometry>
+          <material><ambient>0.6 0.3 0.2 1</ambient><diffuse>0.6 0.3 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="walls">
+      <static>true</static>
+      <link name="south"><pose>10 0 0.5 0 0 0</pose>
+        <collision name="wall"><geometry><box><size>20.2 0.2 1</size></box></geometry></collision>
+        <visual name="wall_visual"><geometry><box><size>20.2 0.2 1</size></box></geometry></visual>
+      </link>
+      <link name="north"><pose>10 12 0.5 0 0 0</pose>
+        <collision name="wall"><geometry><box><size>20.2 0.2 1</size></box></geometry></collision>
+        <visual name="wall_visual"><geometry><box><size>20.2 0.2 1</size></box></geometry></visual>
+      </link>
+      <link name="west"><pose>0 6 0.5 0 0 0</pose>
+        <collision name="wall"><geometry><box><size>0.2 12.2 1</size></box></geometry></collision>
+        <visual name="wall_visual"><geometry><box><size>0.2 12.2 1</size></box></geometry></visual>
+      </link>
+      <link name="east"><pose>20 6 0.5 0 0 0</pose>
+        <collision name="wall"><geometry><box><size>0.2 12.2 1</size></box></geometry></collision>
+        <visual name="wall_visual"><geometry><box><size>0.2 12.2 1</size></box></geometry></visual>
+      </link>
+    </model>
+    <include><uri>model://sentry</uri><name>sentry</name><pose>3 6 0.02 0 0 0</pose></include>
+  </world>
+</sdf>

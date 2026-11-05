@@ -1,0 +1,28 @@
+name: Bug report
+description: Report a reproducible problem
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题与预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 提供命令、配置差异和最小输入，避免上传私有数据。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: OS、Python、ROS/Nav2/Gazebo、PyTorch、模型 schema 以及代码提交。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志与验证结果
+      description: 请移除凭据和设备私有信息。

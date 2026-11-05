@@ -1,0 +1,18 @@
+RMJC Cooperative Sentry
+Copyright 2026 RMJC contributors
+
+Optional imported maps, worlds and configuration originate from:
+SMBU-PolarBear-Robotics-Team/pb2025_sentry_nav
+SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator
+
+These projects are licensed under Apache License 2.0. The import tool retains
+their license files and records source revisions and substitutions. Imported
+assets remain the work of their respective copyright holders.
+
+The offline RL extension references Harkerbest/RMUC-OfflineRL,
+Copyright (c) 2026 Navigator Team, Beijing Normal-Hong Kong Baptist University.
+Its MIT reference license and fixed revision are recorded in
+integrations/rmuc_offlinerl/. Official RMUC data remains subject to DJI's terms.
+
+Third-party data, maps, trademarks and generated model artifacts are not
+covered by the project's source-code license. See THIRD_PARTY_NOTICES.md.

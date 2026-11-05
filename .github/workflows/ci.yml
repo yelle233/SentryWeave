@@ -1,0 +1,46 @@
+name: Sentry Jazzy
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+on:
+  push:
+  pull_request:
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - run: ruff check src tests tools
+      - run: pytest tests -q
+  jazzy-physics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t rmjc:ci -f docker/Dockerfile .
+      - run: docker run --rm rmjc:ci bash tools/ros_exec.bash python3 -m pytest tests -q
+      - run: |
+          mkdir -p artifacts
+          docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 -v "$PWD/artifacts:/ws/artifacts" \
+            rmjc:ci bash tools/ros_exec.bash python3 tools/gazebo_acceptance.py --out artifacts/ci-physics
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: physics-evidence
+          path: artifacts/ci-physics
+  offline-learning:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e '.[dev,rl]'
+      - run: pytest tests/test_offline_data.py tests/test_offline_learning.py tests/test_rl_policy.py -q

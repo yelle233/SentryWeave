@@ -1,0 +1,10 @@
+std_msgs/Header header
+uint64 world_seq
+uint64 epoch
+RobotTrack self_robot
+bool self_valid
+RobotTrack[<=32] allies
+RobotTrack[<=32] enemies
+RefereeState referee
+bool referee_valid
+string mode

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "experiment": "RMUC 2026 offline navigation reference",
+  "recorded_on": "2026-11-05",
+  "source": {
+    "article": "https://bbs.robomaster.com/article/1936220",
+    "sqlite_sha256": "53ac64efeaf570c0e21d8c3724dcefcb0123196b3c7ef963183a911863f724a7",
+    "rounds": 613,
+    "timeseries_rows": 4015383,
+    "events_rows": 1474178
+  },
+  "protocol": {
+    "split_seed": 29,
+    "group_key": ["region", "match_number"],
+    "train": {"groups": 186, "rounds": 431, "transitions": 186690},
+    "validation": {"groups": 39, "rounds": 87, "transitions": 37807},
+    "test": {"groups": 41, "rounds": 95, "transitions": 41368},
+    "observation_dim": 73,
+    "action_dim": 2,
+    "max_horizon_seconds": 5,
+    "gamma_per_second": 0.99,
+    "training_roles": [3, 4],
+    "training_samples": 121741,
+    "seeds": [7, 19, 43],
+    "checkpoint_metric": "validation balanced endpoint error",
+    "bc": {"updates": 30000, "batch_size": 512, "hidden": [128, 128]},
+    "iql": {"updates": 30000, "batch_size": 512, "hidden": [128, 128], "expectile": 0.7, "beta": 3.0, "initial_actor": "same-seed BC"},
+    "dt": {"updates": 15000, "batch_size": 64, "width": 64, "heads": 4, "layers": 2, "context": 8},
+    "environment": {"python": "3.12.3", "torch": "2.9.1+cu128", "gpu": "NVIDIA GeForce RTX 5070", "gpu_memory_gib": 12}
+  },
+  "test_metrics": {
+    "unit": "meters",
+    "definition": "Euclidean error of trajectory-derived macro navigation endpoint",
+    "infantry": {
+      "samples": 27591,
+      "moving_fraction": 0.6644,
+      "zero_displacement_error": 2.148024114782244,
+      "constant_velocity_error": 3.260852701672257,
+      "bc": {"mean_error": 1.9043055121998063, "seed_std": 0.009042174820268053, "moving_error": 2.4699742733333157},
+      "iql": {"mean_error": 1.9384030508708967, "seed_std": 0.0021412320806334637, "moving_error": 2.4757702906523167},
+      "dt": {"mean_error": 2.0086202749728286, "seed_std": 0.01681427384989186, "moving_error": 2.5909723152945623}
+    },
+    "sentry_transfer": {
+      "samples": 13777,
+      "moving_fraction": 0.3125,
+      "zero_displacement_error": 0.8513305457287457,
+      "constant_velocity_error": 1.8570079590305448,
+      "bc": {"mean_error": 1.2232453807127388, "seed_std": 0.025556812491123522, "moving_error": 2.091828631987254},
+      "iql": {"mean_error": 1.2862419502110392, "seed_std": 0.011046436079694607, "moving_error": 2.0996602858072433},
+      "dt": {"mean_error": 1.1696351437720736, "seed_std": 0.04234408886082293, "moving_error": 2.0717189738415134}
+    }
+  },
+  "integration": {
+    "environment": "ROS 2 Jazzy / Nav2 1.3.13 / Gazebo Harmonic 8.15.0",
+    "arena_meters": [20, 12],
+    "model_field_meters": [28, 15],
+    "blend": 0.25,
+    "iql": {"training_seed": 43, "checkpoint_step": 1000, "displacement_m": 12.058093253705707, "scored_decisions": 22, "arrived_task": "SUPPORT", "execution_faults": 0},
+    "dt": {"training_seed": 7, "checkpoint_step": 14000, "displacement_m": 12.074970051430167, "scored_decisions": 6, "arrived_task": "SUPPORT", "execution_faults": 0}
+  },
+  "kinematic_closed_loop": {
+    "seeds": [701, 702, 703],
+    "scenario_count": 10,
+    "duration_seconds": 30,
+    "blend": 0.25,
+    "model_selection": "full infantry validation",
+    "fixed": {"reward": 1.1058, "support_coverage": 0.8434, "defense_coverage": 0.0696, "switches": 0.70},
+    "rule": {"reward": 0.9004, "support_coverage": 0.3021, "defense_coverage": 0.8965, "switches": 3.70},
+    "bc": {"training_seed": 19, "reward": 0.9024, "support_coverage": 0.3036, "defense_coverage": 0.9140, "switches": 3.80},
+    "iql": {"training_seed": 43, "reward": 0.8861, "support_coverage": 0.3071, "defense_coverage": 0.8401, "switches": 3.87},
+    "dt": {"training_seed": 7, "reward": 0.8070, "support_coverage": 0.2603, "defense_coverage": 0.8330, "switches": 5.07}
+  },
+  "limitations": [
+    "Aggregated analysis only; no raw match records, trajectories or weights are distributed.",
+    "Navigation targets are proxy labels, not recorded control commands.",
+    "Global positions may not be available to a real robot under competition rules.",
+    "Censoring, missing variables and action distribution shift limit offline value estimates.",
+    "The reference arena differs from the official field; navigation acceptance is not win-rate evidence.",
+    "These results do not establish IQL superiority over BC or a competition-ready controller."
+  ]
+}

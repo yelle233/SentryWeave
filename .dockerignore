@@ -1,0 +1,16 @@
+.git
+.venv
+.venv-rl
+artifacts
+third_party
+build
+install
+log
+**/__pycache__
+.pytest_cache
+.ruff_cache
+**/*.egg-info
+.env
+.env.*
+.idea
+docs/superpowers

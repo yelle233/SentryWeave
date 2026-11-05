@@ -1,0 +1,15 @@
+std_msgs/Header header
+string session_id
+uint64 task_id
+uint8 IDLE=0
+uint8 ACCEPTED=1
+uint8 RUNNING=2
+uint8 CANCELING=3
+uint8 SUCCEEDED=4
+uint8 FAILED=5
+uint8 CANCELED=6
+uint8 REJECTED=7
+uint8 execution_state
+float64 remaining_distance_m
+bool remaining_distance_valid
+string reason_code

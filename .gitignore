@@ -1,0 +1,36 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+.venv-rl/
+*.egg-info/
+build/
+install/
+log/
+artifacts/
+third_party/
+*.db3
+*.mcap
+.coverage
+htmlcov/
+
+# Local environments, credentials and editor/session state
+.env
+.env.*
+!.env.example
+.idea/
+.DS_Store
+*.swp
+*.swo
+docs/superpowers/
+
+# Research inputs and generated model/binary data
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.7z
+*.safetensors
+*.pt
+*.pth
+*.onnx

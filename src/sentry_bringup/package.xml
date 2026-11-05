@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>sentry_bringup</name><version>0.1.0</version>
+  <description>Jazzy configurations and launch files for cooperative sentry navigation.</description>
+  <maintainer email="189729296+yelle233@users.noreply.github.com">yelle233</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>sentry_ros</exec_depend><exec_depend>sentry_gazebo</exec_depend>
+  <exec_depend>sentry_core</exec_depend><exec_depend>python3-yaml</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend><exec_depend>nav2_common</exec_depend>
+  <exec_depend>launch_ros</exec_depend><exec_depend>robot_state_publisher</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

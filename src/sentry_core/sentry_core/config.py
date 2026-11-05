@@ -1,0 +1,149 @@
+"""Validated, immutable season settings. Coordinates in the sample are synthetic."""
+
+from dataclasses import asdict, dataclass
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import yaml
+
+from .model import IntentType, TaskType, Vec2
+
+
+@dataclass(frozen=True)
+class Zone:
+    name: str
+    center: Vec2
+    radius: float
+    intent: IntentType
+    importance: float
+
+
+@dataclass(frozen=True)
+class Point:
+    name: str
+    zone: str
+    position: Vec2
+    yaw: float
+    tasks: tuple[TaskType, ...]
+
+
+@dataclass(frozen=True)
+class Config:
+    frame: str
+    self_id: int
+    site: str
+    bounds: tuple[float, float, float, float]
+    obstacles: tuple[tuple[float, float, float, float], ...]
+    robot_radius: float
+    zones: tuple[Zone, ...]
+    points: tuple[Point, ...]
+    weights: tuple[float, ...]
+    observed_age: float = 0.3
+    predicted_age: float = 0.9
+    self_timeout: float = 0.5
+    referee_timeout: float = 2.0
+    retention: float = 5.0
+    max_speed: float = 6.0
+    jump_slack: float = 0.6
+    history_sec: float = 3.0
+    min_hold: float = 3.0
+    switch_margin: float = 0.08
+    confirm_cycles: int = 3
+    cooldown: float = 5.0
+    task_lease: float = 2.0
+    intent_threshold: float = 0.35
+    critical_hp: float = 0.25
+    recovered_hp: float = 0.7
+    urgent_threat: float = 0.72
+    ally_clearance: float = 0.85
+    nominal_speed: float = 1.5
+    supply_enabled: bool = True
+    max_tracks: int = 32
+
+    @property
+    def map_fingerprint(self) -> str:
+        values = {key: asdict(self)[key] for key in
+                  ("frame", "bounds", "obstacles", "robot_radius", "zones", "points")}
+        return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+
+
+def validate_config(config: Config) -> Config:
+    if len(config.weights) != 6 or not all(
+        math.isfinite(v) and v >= 0 for v in config.weights
+    ) or abs(sum(config.weights) - 1) > 1e-6:
+        raise ValueError("utility weights must contain six finite nonnegative values summing to 1")
+    x0, y0, x1, y1 = config.bounds
+    if not all(math.isfinite(v) for v in config.bounds) or not (x0 < x1 and y0 < y1):
+        raise ValueError("invalid map bounds")
+    if not config.frame or not 1 <= config.self_id <= 65535:
+        raise ValueError("invalid frame or self_id")
+    for name in ("robot_radius", "observed_age", "predicted_age", "self_timeout",
+                 "referee_timeout", "retention", "max_speed", "history_sec", "cooldown",
+                 "task_lease", "nominal_speed", "ally_clearance"):
+        if not math.isfinite(getattr(config, name)) or getattr(config, name) <= 0:
+            raise ValueError(f"{name} must be finite and positive")
+    if not config.observed_age < config.predicted_age < config.retention:
+        raise ValueError("observed_age < predicted_age < retention is required")
+    if config.min_hold < 0 or not math.isfinite(config.min_hold):
+        raise ValueError("min_hold must be finite and nonnegative")
+    for name in ("switch_margin", "intent_threshold", "critical_hp",
+                 "recovered_hp", "urgent_threat", "jump_slack"):
+        value = getattr(config, name)
+        if not math.isfinite(value) or not 0 <= value <= 1:
+            raise ValueError(f"invalid {name}")
+    if config.critical_hp >= config.recovered_hp:
+        raise ValueError("critical_hp must be below recovered_hp")
+    if config.confirm_cycles < 1 or config.max_tracks < 1:
+        raise ValueError("invalid positive count")
+    names = {z.name for z in config.zones}
+    if len(names) != len(config.zones) or not names:
+        raise ValueError("zone names must be unique and nonempty")
+    roles = {z.intent for z in config.zones}
+    if not {IntentType.ATTACK_OUTPOST, IntentType.DEFEND_BASE,
+            IntentType.CONTEST_AREA, IntentType.RETREAT} <= roles:
+        raise ValueError("map needs attack, defense, contest and recovery zones")
+    for rect in config.obstacles:
+        if (len(rect) != 4 or not all(math.isfinite(v) for v in rect)
+                or rect[0] >= rect[2] or rect[1] >= rect[3]):
+            raise ValueError("invalid obstacle rectangle")
+    for zone in config.zones:
+        if (not zone.center.finite or not x0 <= zone.center.x <= x1
+                or not y0 <= zone.center.y <= y1 or not math.isfinite(zone.radius)
+                or zone.radius <= 0 or not 0 <= zone.importance <= 1):
+            raise ValueError(f"invalid zone {zone.name}")
+    point_names = set()
+    for point in config.points:
+        if (point.name in point_names or not point.name or point.zone not in names
+                or not point.position.finite or not math.isfinite(point.yaw)
+                or not x0 < point.position.x < x1 or not y0 < point.position.y < y1
+                or not point.tasks):
+            raise ValueError(f"invalid tactical point {point.name}")
+        if any(a - config.robot_radius <= point.position.x <= c + config.robot_radius
+               and b - config.robot_radius <= point.position.y <= d + config.robot_radius
+               for a, b, c, d in config.obstacles):
+            raise ValueError(f"tactical point {point.name} lies in an obstacle")
+        point_names.add(point.name)
+    return config
+
+
+def load_config(path: str | Path) -> Config:
+    with open(path, encoding="utf-8") as stream:
+        raw = yaml.safe_load(stream)
+    if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+        raise ValueError("unsupported tactics schema_version")
+    allowed = {"schema_version", "frame", "self_id", "site", "bounds", "obstacles",
+               "robot_radius", "zones", "points", "weights", "parameters"}
+    if set(raw) - allowed:
+        raise ValueError(f"unknown tactics keys: {set(raw) - allowed}")
+    zones = tuple(Zone(z["id"], Vec2(*z["center"]), float(z["radius"]),
+                       IntentType[z["intent"]], float(z["importance"])) for z in raw["zones"])
+    points = tuple(Point(p["id"], p["zone"], Vec2(*p["xy"]), float(p.get("yaw", 0)),
+                         tuple(TaskType[t] for t in p["tasks"])) for p in raw["points"])
+    return validate_config(Config(
+        frame=raw["frame"], self_id=int(raw["self_id"]), site=raw["site"],
+        bounds=tuple(raw["bounds"]), obstacles=tuple(tuple(r) for r in raw["obstacles"]),
+        robot_radius=float(raw["robot_radius"]), zones=zones, points=points,
+        weights=tuple(raw["weights"]), **raw.get("parameters", {}),
+    ))

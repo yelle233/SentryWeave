@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/Harkerbest/RMUC-OfflineRL",
+  "commit": "064d8336edd18053ce320202187862dce010b5c7",
+  "code_license": "MIT",
+  "official_article": "https://bbs.robomaster.com/article/1936220",
+  "dataset_url": "https://hz-rm-bbs-web-prod.oss-cn-hangzhou.aliyuncs.com/389ecbb646434455af545a78bd2926fe1784290926981/rmuc_2026_region_dataset.7z",
+  "archive_size": 113419434,
+  "archive_md5": "89ee19d15db4bfc79094e89419e09189",
+  "scope": "Navigation subgoal learning; reward-only privileged referee fields; no firing/aiming output."
+}

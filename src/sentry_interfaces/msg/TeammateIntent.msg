@@ -1,0 +1,12 @@
+uint16 robot_id
+uint8 UNKNOWN=0
+uint8 ATTACK_OUTPOST=1
+uint8 DEFEND_BASE=2
+uint8 CONTEST_AREA=3
+uint8 RETREAT=4
+uint8 TRANSIT=5
+uint8 intent_type
+string zone_id
+float64[6] probabilities
+float64 confidence
+bool valid
