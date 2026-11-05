@@ -5,7 +5,7 @@ setup(
     data_files=[("share/ament_index/resource_index/packages", ["resource/sentry_ros"]),
                 ("share/sentry_ros", ["package.xml"])],
     install_requires=["setuptools"], zip_safe=True,
-    maintainer="yelle233", maintainer_email="189729296+yelle233@users.noreply.github.com",
+    maintainer="yelle233 (未来战队)", maintainer_email="1376982098@qq.com",
     description="Jazzy cooperative sentry runtime", license="Apache-2.0",
     entry_points={"console_scripts": [
         "world_model = sentry_ros.world_node:main",

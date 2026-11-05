@@ -1,13 +1,14 @@
 # 参与贡献
 
-感谢参与 RMJC。项目接受决策算法、数据处理、ROS 适配、仿真、测试和文档改进。
-问题与讨论统一使用 [GitHub Issues](https://github.com/yelle233/RMJC/issues)。
+感谢参与 SentryWeave。项目由未来战队维护，接受决策算法、数据处理、ROS 适配、仿真、测试和文档改进。
+问题与讨论优先使用 [GitHub Issues](https://github.com/yelle233/SentryWeave/issues)；
+其他联系可发送至 [1376982098@qq.com](mailto:1376982098@qq.com)，维护者为 [yelle233](https://github.com/yelle233)。
 
 ## 开发环境
 
 ```bash
-git clone https://github.com/yelle233/RMJC.git
-cd RMJC
+git clone https://github.com/yelle233/SentryWeave.git
+cd SentryWeave
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 ```

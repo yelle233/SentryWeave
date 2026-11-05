@@ -19,7 +19,7 @@
 | 原 RMOSS 射击/比赛裁判插件 | 参考验证链用规范化裁判/敌我观测注入，不声称已移植比赛物理 |
 | `Twist` / `TwistStamped` 版本差异 | Jazzy 显式使用 Twist，全链一致 |
 
-RMJC 提供 Jazzy 标准插件的替代运行路径。自定义 Gazebo 插件需要单独做源码/API 迁移；
+SentryWeave 提供 Jazzy 标准插件的替代运行路径。自定义 Gazebo 插件需要单独做源码/API 迁移；
 导入器会拒绝无法自动适配的插件。
 
 ## 导入

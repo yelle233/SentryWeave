@@ -1,6 +1,6 @@
 # 离线强化学习
 
-RMJC 提供 BC、IQL 和 Decision Transformer 的导航子目标学习。
+SentryWeave 提供 BC、IQL 和 Decision Transformer 的导航子目标学习。
 首次使用可按 [入门教程](getting-started.md) 执行完整流程。
 
 ## 数据合同

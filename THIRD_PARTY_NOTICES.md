@@ -1,6 +1,6 @@
 # 第三方源码与数据
 
-RMJC 自身源码按 [Apache-2.0](LICENSE) 发布。该许可证不改变以下材料的原有权利或使用条件。
+SentryWeave 自身源码按 [Apache-2.0](LICENSE) 发布。该许可证不改变以下材料的原有权利或使用条件。
 
 ## PolarBear 导航与 RMU 仿真
 
@@ -19,7 +19,7 @@ RMJC 自身源码按 [Apache-2.0](LICENSE) 发布。该许可证不改变以下�
 Copyright (c) 2026 Navigator Team, Beijing Normal-Hong Kong Baptist University (BNBU)。
 上游 MIT 文本和固定提交见
 [`integrations/rmuc_offlinerl/`](integrations/rmuc_offlinerl/)。
-RMJC 的导航学习实现使用适配在线接口的观测与动作定义，实验数字不能直接替代上游不同任务的结果。
+SentryWeave 的导航学习实现使用适配在线接口的观测与动作定义，实验数字不能直接替代上游不同任务的结果。
 
 ## RMUC 2026 比赛数据
 
@@ -34,7 +34,7 @@ RMJC 的导航学习实现使用适配在线接口的观测与动作定义，实
 ## ROS 2、Navigation2 与 Gazebo
 
 这些依赖通过系统包或容器安装，遵循各自许可证。项目保留标准 ROS 2 / Nav2 接口，
-不会将依赖的许可证替换为 RMJC 的许可证。
+不会将依赖的许可证替换为 SentryWeave 的许可证。
 
 RoboMaster、RMUC 及相关名称属于对应权利人。使用这些名称仅用于说明适用领域与数据来源，
 不表示官方授权、认可或背书。

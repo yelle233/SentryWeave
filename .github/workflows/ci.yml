@@ -1,4 +1,4 @@
-name: Sentry Jazzy
+name: SentryWeave CI
 permissions:
   contents: read
 concurrency:
@@ -23,12 +23,12 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t rmjc:ci -f docker/Dockerfile .
-      - run: docker run --rm rmjc:ci bash tools/ros_exec.bash python3 -m pytest tests -q
+      - run: docker build -t sentryweave:ci -f docker/Dockerfile .
+      - run: docker run --rm sentryweave:ci bash tools/ros_exec.bash python3 -m pytest tests -q
       - run: |
           mkdir -p artifacts
           docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 -v "$PWD/artifacts:/ws/artifacts" \
-            rmjc:ci bash tools/ros_exec.bash python3 tools/gazebo_acceptance.py --out artifacts/ci-physics
+            sentryweave:ci bash tools/ros_exec.bash python3 tools/gazebo_acceptance.py --out artifacts/ci-physics
       - uses: actions/upload-artifact@v4
         if: always()
         with:

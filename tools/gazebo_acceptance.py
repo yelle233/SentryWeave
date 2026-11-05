@@ -24,10 +24,10 @@ def main():
     directory = Path(args.out).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "ROS_DOMAIN_ID": str(args.domain),
-           "GZ_PARTITION": f"rmjc-acceptance-{uuid.uuid4().hex}",
-           "RMJC_GAZEBO_TEST": "1", "RMJC_GAZEBO_REPORT": str(directory / "physics.json")}
+           "GZ_PARTITION": f"sentryweave-acceptance-{uuid.uuid4().hex}",
+           "SENTRYWEAVE_GAZEBO_TEST": "1", "SENTRYWEAVE_GAZEBO_REPORT": str(directory / "physics.json")}
     if args.rl_model:
-        env["RMJC_RL_EXPECTED"] = "1"
+        env["SENTRYWEAVE_RL_EXPECTED"] = "1"
     with (directory / "launch.log").open("w") as log:
         command = ["ros2", "launch", "sentry_bringup", "simulation.launch.py", "scenario:=team_push",
                    f"trace_path:={directory / 'decisions.jsonl'}"]

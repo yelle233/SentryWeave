@@ -1,6 +1,6 @@
 # 入门：从首次克隆到训练与运行
 
-本教程面向首次使用 RMJC 的开发者。主路径为 Ubuntu 24.04 / Python 3.12，
+本教程面向首次使用 SentryWeave 的开发者。主路径为 Ubuntu 24.04 / Python 3.12，
 训练使用独立虚拟环境，ROS 2 Jazzy / Harmonic 通过 Docker 运行。
 
 源码不附带比赛数据库、训练权重或预构建镜像。完成相应步骤后，这些文件会生成在本地。
@@ -8,12 +8,12 @@
 ## 1. 获取工程
 
 ```bash
-git clone https://github.com/yelle233/RMJC.git "$HOME/RMJC"
-cd "$HOME/RMJC"
+git clone https://github.com/yelle233/SentryWeave.git "$HOME/SentryWeave"
+cd "$HOME/SentryWeave"
 ls README.md pyproject.toml docker/Dockerfile
 ```
 
-后续命令默认在仓库根目录执行。新终端先执行 `cd "$HOME/RMJC"`；
+后续命令默认在仓库根目录执行。新终端先执行 `cd "$HOME/SentryWeave"`；
 如果克隆到其他目录，使用对应路径。
 
 - `#` 开头是注释。
@@ -63,11 +63,11 @@ sudo usermod -aG docker "$USER"
 构建与验收：
 
 ```bash
-docker build -t rmjc:jazzy -f docker/Dockerfile .
+docker build -t sentryweave:jazzy -f docker/Dockerfile .
 mkdir -p artifacts
 docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 \
   -v "$PWD/artifacts:/ws/artifacts" \
-  rmjc:jazzy bash tools/ros_exec.bash \
+  sentryweave:jazzy bash tools/ros_exec.bash \
   python3 tools/gazebo_acceptance.py --out artifacts/physics
 ```
 
@@ -226,7 +226,7 @@ DT：
 在第二个终端查看进度：
 
 ```bash
-cd "$HOME/RMJC"
+cd "$HOME/SentryWeave"
 tail -f artifacts/rl/runs/iql-seed7/metrics.jsonl
 ```
 
@@ -290,7 +290,7 @@ FQE 的使用和限制见 [离线强化学习](offline-rl.md)。
 ```bash
 docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 \
   -v "$PWD/artifacts:/ws/artifacts" \
-  rmjc:jazzy bash tools/ros_exec.bash \
+  sentryweave:jazzy bash tools/ros_exec.bash \
   python3 tools/gazebo_acceptance.py \
   --rl-model /ws/artifacts/rl/runs/iql-seed7/actor.json \
   --rl-blend 0.25 --allow-domain-transfer \
@@ -317,10 +317,10 @@ docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 \
 
 ```bash
 mkdir -p artifacts/live
-docker run --rm -it --name rmjc-demo \
+docker run --rm -it --name sentryweave-demo \
   -e LIBGL_ALWAYS_SOFTWARE=1 \
   -v "$PWD/artifacts:/ws/artifacts" \
-  rmjc:jazzy bash tools/ros_exec.bash \
+  sentryweave:jazzy bash tools/ros_exec.bash \
   ros2 launch sentry_bringup simulation.launch.py \
   scenario:=team_push \
   rl_model:=/ws/artifacts/rl/runs/iql-seed7/actor.json \
@@ -331,9 +331,9 @@ docker run --rm -it --name rmjc-demo \
 第二个终端检查：
 
 ```bash
-docker exec rmjc-demo bash tools/ros_exec.bash ros2 topic echo /sentry/tactical/task --once
-docker exec rmjc-demo bash tools/ros_exec.bash ros2 topic echo /sentry/motion/permit --once
-docker exec rmjc-demo bash tools/ros_exec.bash ros2 lifecycle get /sentry/bt_navigator
+docker exec sentryweave-demo bash tools/ros_exec.bash ros2 topic echo /sentry/tactical/task --once
+docker exec sentryweave-demo bash tools/ros_exec.bash ros2 topic echo /sentry/motion/permit --once
+docker exec sentryweave-demo bash tools/ros_exec.bash ros2 lifecycle get /sentry/bt_navigator
 ```
 
 查看 `tactical/trace` 或 JSONL 中的 `policy_info`，了解建议、模型 ID 和回退原因。
@@ -344,7 +344,7 @@ docker exec rmjc-demo bash tools/ros_exec.bash ros2 lifecycle get /sentry/bt_nav
 更换模型后重启节点，不会自动热加载磁盘文件。
 
 ```bash
-docker stop --timeout 10 rmjc-demo
+docker stop --timeout 10 sentryweave-demo
 ```
 
 ## 12. 进入实车对接

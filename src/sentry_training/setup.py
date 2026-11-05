@@ -5,7 +5,7 @@ setup(
     data_files=[("share/ament_index/resource_index/packages", ["resource/sentry_training"]),
                 ("share/sentry_training", ["package.xml"])],
     install_requires=["setuptools", "numpy"], zip_safe=True,
-    maintainer="yelle233", maintainer_email="189729296+yelle233@users.noreply.github.com",
+    maintainer="yelle233 (未来战队)", maintainer_email="1376982098@qq.com",
     description="Sentry training and replay", license="Apache-2.0",
     entry_points={"console_scripts": [
         "sentry_train = sentry_training.cli:main",

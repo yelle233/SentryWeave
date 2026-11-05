@@ -2,7 +2,7 @@
 <package format="3">
   <name>sentry_core</name><version>0.1.0</version>
   <description>ROS-independent tracking, intent, tactical decisions and navigation ownership.</description>
-  <maintainer email="189729296+yelle233@users.noreply.github.com">yelle233</maintainer>
+  <maintainer email="1376982098@qq.com">yelle233 (未来战队)</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>python3-numpy</exec_depend><exec_depend>python3-yaml</exec_depend>

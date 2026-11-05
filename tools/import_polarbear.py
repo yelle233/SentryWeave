@@ -53,7 +53,7 @@ def migrate_sdf(text: str, spawn=None) -> str:
         ET.SubElement(include, "name").text = "sentry"
         ET.SubElement(include, "pose").text = f"{spawn[0]} {spawn[1]} 0.05 0 0 {spawn[2]}"
     ET.indent(root, space="  ")
-    notice = "<!-- Modified by RMJC for Gazebo Harmonic; source revision: import_manifest.json. -->\n"
+    notice = "<!-- Modified by SentryWeave for Gazebo Harmonic; source revision: import_manifest.json. -->\n"
     return '<?xml version="1.0"?>\n' + notice + ET.tostring(root, encoding="unicode") + "\n"
 
 
@@ -159,7 +159,7 @@ def import_assets(nav, simulator, destination, spawn=(3., 6., 0.)):
                 if not asset.exists():
                     raise ValueError(f"model asset missing in sparse/LFS checkout: {asset}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".rmjc-import-", dir=destination.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix=".sentryweave-import-", dir=destination.parent) as temporary:
         output = Path(temporary) / "assets"
         output.mkdir()
         shutil.copytree(source_resources / "models", output / "models")
@@ -172,7 +172,7 @@ def import_assets(nav, simulator, destination, spawn=(3., 6., 0.)):
         reference = yaml.safe_load((ROOT / "src/sentry_bringup/config/nav2.yaml").read_text())
         source = yaml.safe_load((nav / "pb2025_nav_bringup/config/simulation/nav2_params.yaml").read_text())
         migrated, audit = migrate_navigation(source, reference)
-        notice = "# Modified by RMJC for ROS 2 Jazzy; sources and replacements: import_manifest.json.\n"
+        notice = "# Modified by SentryWeave for ROS 2 Jazzy; sources and replacements: import_manifest.json.\n"
         (output / "nav2_jazzy.yaml").write_text(notice + yaml.safe_dump(migrated, sort_keys=False))
         bridge = yaml.safe_load((simulator / "rmu_gazebo_simulator/config/ros_gz_bridge.yaml").read_text())
         (output / "upstream_bridge_jazzy.yaml").write_text(

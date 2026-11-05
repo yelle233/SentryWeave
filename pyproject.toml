@@ -3,21 +3,22 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rmjc-sentry"
+name = "sentryweave"
 version = "0.1.0"
-description = "Trainable cooperative RoboMaster sentry decisions for ROS 2 Jazzy"
+description = "SentryWeave: cooperative RoboMaster sentry decisions and offline learning for ROS 2 Jazzy"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "integrations/rmuc_offlinerl/LICENSE.reference"]
-authors = [{name = "yelle233"}]
+authors = [{name = "yelle233", email = "1376982098@qq.com"}]
+maintainers = [{name = "未来战队", email = "1376982098@qq.com"}]
 requires-python = ">=3.12"
 dependencies = ["numpy>=1.26,<3", "PyYAML>=6,<7"]
 
 [project.urls]
-Homepage = "https://github.com/yelle233/RMJC"
-Repository = "https://github.com/yelle233/RMJC"
-Documentation = "https://github.com/yelle233/RMJC/tree/main/docs"
-Issues = "https://github.com/yelle233/RMJC/issues"
+Homepage = "https://github.com/yelle233/SentryWeave"
+Repository = "https://github.com/yelle233/SentryWeave"
+Documentation = "https://github.com/yelle233/SentryWeave/tree/main/docs"
+Issues = "https://github.com/yelle233/SentryWeave/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "ruff>=0.9"]

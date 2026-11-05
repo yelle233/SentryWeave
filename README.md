@@ -1,17 +1,24 @@
-# RMJC · RoboMaster 自主协同决策
+# SentryWeave · 织策
 
-[![CI](https://github.com/yelle233/RMJC/actions/workflows/ci.yml/badge.svg)](https://github.com/yelle233/RMJC/actions/workflows/ci.yml)
+[![CI](https://github.com/yelle233/SentryWeave/actions/workflows/ci.yml/badge.svg)](https://github.com/yelle233/SentryWeave/actions/workflows/ci.yml)
 [![ROS 2](https://img.shields.io/badge/ROS_2-Jazzy-34495e)](https://docs.ros.org/en/jazzy/)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776ab)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue)](LICENSE)
 
 **Cooperative sentry decision making and offline navigation learning for ROS 2 Jazzy.**
 
-RMJC 是面向 RoboMaster 哨兵的自主协同决策与离线学习框架。系统结合自身资源、队友运动趋势、
+SentryWeave 是面向 RoboMaster 哨兵的自主协同决策与离线学习框架。系统结合自身资源、队友运动趋势、
 敌方威胁和区域覆盖，在支援、阻截、防守、恢复及保持任务之间选择，并通过 Nav2 执行导航。
 
 项目提供可解释的规则基线、可训练的 HMM 意图模型，以及基于 RMUC 比赛日志的
 **BC、IQL、Decision Transformer** 导航子目标学习。训练、回放与在线运行共用核心数据模型和约束。
+
+| 项目信息 | 内容 |
+|---|---|
+| 项目名称 | SentryWeave（织策） |
+| 所属战队 | **未来战队** |
+| 维护者 | [yelle233](https://github.com/yelle233) |
+| 联系邮箱 | [1376982098@qq.com](mailto:1376982098@qq.com) |
 
 > 项目定位为研究与集成框架。示例场地、阈值和奖励不是官方赛季规则。
 > 当前离线实验尚未证明 IQL 优于 BC 或既有规则策略；评测口径与限制见 [实验基线](docs/benchmarks.md)。
@@ -42,8 +49,8 @@ flowchart LR
 ## 获取代码
 
 ```bash
-git clone https://github.com/yelle233/RMJC.git
-cd RMJC
+git clone https://github.com/yelle233/SentryWeave.git
+cd SentryWeave
 ```
 
 支持环境为 **Ubuntu 24.04、Python 3.12、ROS 2 Jazzy、Gazebo Harmonic**。
@@ -73,12 +80,12 @@ python3 -m venv .venv
 在仓库根目录构建镜像：
 
 ```bash
-docker build -t rmjc:jazzy -f docker/Dockerfile .
+docker build -t sentryweave:jazzy -f docker/Dockerfile .
 mkdir -p artifacts
 docker run --rm -it \
   -e LIBGL_ALWAYS_SOFTWARE=1 \
   -v "$PWD/artifacts:/ws/artifacts" \
-  rmjc:jazzy bash tools/ros_exec.bash \
+  sentryweave:jazzy bash tools/ros_exec.bash \
   ros2 launch sentry_bringup simulation.launch.py \
   scenario:=team_push trace_path:=/ws/artifacts/decisions.jsonl
 ```
@@ -91,7 +98,7 @@ docker run --rm -it \
 ```bash
 docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 \
   -v "$PWD/artifacts:/ws/artifacts" \
-  rmjc:jazzy bash tools/ros_exec.bash \
+  sentryweave:jazzy bash tools/ros_exec.bash \
   python3 tools/gazebo_acceptance.py --out artifacts/physics
 ```
 
@@ -141,7 +148,7 @@ python3 -m venv .venv-rl
 ```bash
 docker run --rm -it -e LIBGL_ALWAYS_SOFTWARE=1 \
   -v "$PWD/artifacts:/ws/artifacts" \
-  rmjc:jazzy bash tools/ros_exec.bash \
+  sentryweave:jazzy bash tools/ros_exec.bash \
   ros2 launch sentry_bringup simulation.launch.py \
   rl_model:=/ws/artifacts/rl/runs/iql-seed7/actor.json \
   rl_blend:=0.25 rl_allow_transfer:=true
@@ -156,7 +163,7 @@ DT、分组验证、FQE 和回放方法见 [离线强化学习](docs/offline-rl.
 ## 项目目录
 
 ```text
-RMJC/
+SentryWeave/
 ├── src/
 │   ├── sentry_core/         # ROS 无关的状态、策略、模型推理和执行协议
 │   ├── sentry_training/     # HMM / BC / IQL / DT、评测与回放
@@ -199,7 +206,7 @@ RMJC/
 离线学习测试需要 `.[rl]`，ROS 测试需要已构建并 source 的 Jazzy 工作区。
 CI 分别检查纯 Python、CPU PyTorch 和 Jazzy/Harmonic。
 
-欢迎提交 [Issue](https://github.com/yelle233/RMJC/issues) 或 Pull Request。
+欢迎提交 [Issue](https://github.com/yelle233/SentryWeave/issues) 或 Pull Request。
 开发环境、提交范围与验证要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证与致谢
@@ -214,4 +221,4 @@ CI 分别检查纯 Python、CPU PyTorch 和 Jazzy/Harmonic。
 - [Navigator Team · RMUC-OfflineRL](https://github.com/Harkerbest/RMUC-OfflineRL)
 - [Navigation2](https://github.com/ros-navigation/navigation2) 和 [Gazebo](https://gazebosim.org/)
 
-RMJC 是独立研究项目，不代表 DJI/RoboMaster 官方规则、认证或背书。
+SentryWeave 由未来战队维护，是独立研究项目，不代表 DJI/RoboMaster 官方规则、认证或背书。

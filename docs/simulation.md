@@ -8,12 +8,12 @@
 首次克隆后，在仓库根目录构建：
 
 ```bash
-docker build -t rmjc:jazzy -f docker/Dockerfile .
+docker build -t sentryweave:jazzy -f docker/Dockerfile .
 mkdir -p artifacts
-docker run --rm -it --name rmjc-demo \
+docker run --rm -it --name sentryweave-demo \
   -e LIBGL_ALWAYS_SOFTWARE=1 \
   -v "$PWD/artifacts:/ws/artifacts" \
-  rmjc:jazzy bash tools/ros_exec.bash \
+  sentryweave:jazzy bash tools/ros_exec.bash \
   ros2 launch sentry_bringup simulation.launch.py \
   scenario:=team_push trace_path:=/ws/artifacts/decisions.jsonl
 ```
@@ -46,7 +46,7 @@ docker run --rm -it --name rmjc-demo \
 ```bash
 docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 \
   -v "$PWD/artifacts:/ws/artifacts" \
-  rmjc:jazzy bash tools/ros_exec.bash \
+  sentryweave:jazzy bash tools/ros_exec.bash \
   python3 tools/gazebo_acceptance.py --out artifacts/physics
 ```
 
@@ -55,7 +55,7 @@ docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 \
 ```bash
 docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 \
   -v "$PWD/artifacts:/ws/artifacts" \
-  rmjc:jazzy bash tools/ros_exec.bash \
+  sentryweave:jazzy bash tools/ros_exec.bash \
   python3 tools/gazebo_acceptance.py \
   --rl-model /ws/artifacts/rl/runs/iql-seed7/actor.json \
   --rl-blend 0.25 --allow-domain-transfer --out artifacts/rl/physics
@@ -91,11 +91,11 @@ Linux X11/XWayland 桌面可使用显示转发。先确认 `DISPLAY` 非空并�
 ```bash
 echo "$DISPLAY"
 xhost +si:localuser:root
-docker run --rm -it --name rmjc-gui \
+docker run --rm -it --name sentryweave-gui \
   -e DISPLAY -e QT_X11_NO_MITSHM=1 -e LIBGL_ALWAYS_SOFTWARE=1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
   -v "$PWD/artifacts:/ws/artifacts" \
-  rmjc:jazzy bash tools/ros_exec.bash \
+  sentryweave:jazzy bash tools/ros_exec.bash \
   ros2 launch sentry_bringup simulation.launch.py gui:=true scenario:=team_push
 xhost -si:localuser:root
 ```
@@ -105,13 +105,13 @@ xhost -si:localuser:root
 
 ## 观察运行状态
 
-对命名为 `rmjc-demo` 的运行容器：
+对命名为 `sentryweave-demo` 的运行容器：
 
 ```bash
-docker exec rmjc-demo bash tools/ros_exec.bash ros2 topic echo /sentry/tactical/task --once
-docker exec rmjc-demo bash tools/ros_exec.bash ros2 topic echo /sentry/tactical/feedback --once
-docker exec rmjc-demo bash tools/ros_exec.bash ros2 topic echo /sentry/motion/permit --once
-docker exec rmjc-demo bash tools/ros_exec.bash ros2 lifecycle get /sentry/bt_navigator
+docker exec sentryweave-demo bash tools/ros_exec.bash ros2 topic echo /sentry/tactical/task --once
+docker exec sentryweave-demo bash tools/ros_exec.bash ros2 topic echo /sentry/tactical/feedback --once
+docker exec sentryweave-demo bash tools/ros_exec.bash ros2 topic echo /sentry/motion/permit --once
+docker exec sentryweave-demo bash tools/ros_exec.bash ros2 lifecycle get /sentry/bt_navigator
 ```
 
 Nav2 应进入 active；开始阶段等待 TF 属于正常初始化过程。

@@ -1,4 +1,4 @@
-"""Run against simulation.launch.py with RMJC_GAZEBO_TEST=1."""
+"""Run against simulation.launch.py with SENTRYWEAVE_GAZEBO_TEST=1."""
 
 import os
 import json
@@ -9,7 +9,7 @@ import pytest
 
 pytestmark = [
     pytest.mark.gazebo,
-    pytest.mark.skipif(os.environ.get("RMJC_GAZEBO_TEST") != "1",
+    pytest.mark.skipif(os.environ.get("SENTRYWEAVE_GAZEBO_TEST") != "1",
                        reason="requires a running Harmonic + Nav2 stack"),
 ]
 
@@ -23,7 +23,7 @@ def test_harmonic_sensors_and_autonomous_navigation_complete():
     from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
 
     rclpy.init()
-    node = rclpy.create_node("rmjc_physics_acceptance", namespace="sentry")
+    node = rclpy.create_node("sentryweave_physics_acceptance", namespace="sentry")
     data = {"scan": 0, "odom": [], "world": [], "arrivals": 0, "faults": [],
             "tasks": {}, "arrived_types": set(), "keepout": None, "rl_used": 0, "rl_algorithms": set()}
 
@@ -71,9 +71,9 @@ def test_harmonic_sensors_and_autonomous_navigation_complete():
         assert TacticalTask.SUPPORT in data["arrived_types"], "No support task arrived in time"
         assert data["keepout"] is not None and 100 in data["keepout"].data
         assert not data["faults"], data["faults"]
-        if os.environ.get("RMJC_RL_EXPECTED") == "1":
+        if os.environ.get("SENTRYWEAVE_RL_EXPECTED") == "1":
             assert data["rl_used"] > 0, "Neural policy never participated in candidate scoring"
-        report_path = os.environ.get("RMJC_GAZEBO_REPORT")
+        report_path = os.environ.get("SENTRYWEAVE_GAZEBO_REPORT")
         if report_path:
             Path(report_path).write_text(json.dumps({
                 "environment": "ROS 2 Jazzy + Gazebo Harmonic + Nav2",

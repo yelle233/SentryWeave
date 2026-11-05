@@ -19,7 +19,7 @@ def _nodes(context):
     namespace = LaunchConfiguration("namespace").perform(context)
     sim = LaunchConfiguration("use_sim_time").perform(context).lower() == "true"
     tactics = load_config(LaunchConfiguration("config_file").perform(context))
-    mask_directory = tempfile.mkdtemp(prefix="rmjc-keepout-")
+    mask_directory = tempfile.mkdtemp(prefix="sentryweave-keepout-")
     mask = render_keepout(tactics, LaunchConfiguration("map").perform(context), mask_directory)
     topic_prefix = "/" + namespace.strip("/") if namespace.strip("/") else ""
     params = ParameterFile(RewrittenYaml(
