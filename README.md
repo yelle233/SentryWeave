@@ -1,4 +1,4 @@
-# SentryWeave · 织策
+# SentryWeave
 
 [![CI](https://github.com/yelle233/SentryWeave/actions/workflows/ci.yml/badge.svg)](https://github.com/yelle233/SentryWeave/actions/workflows/ci.yml)
 [![ROS 2](https://img.shields.io/badge/ROS_2-Jazzy-34495e)](https://docs.ros.org/en/jazzy/)
@@ -15,13 +15,11 @@ SentryWeave 是面向 RoboMaster 哨兵的自主协同决策与离线学习框�
 
 | 项目信息 | 内容 |
 |---|---|
-| 项目名称 | SentryWeave（织策） |
-| 所属战队 | **未来战队** |
+| 项目名称 | SentryWeave |
+| 战队 | **未来战队** |
 | 维护者 | [yelle233](https://github.com/yelle233) |
 | 联系邮箱 | [1376982098@qq.com](mailto:1376982098@qq.com) |
 
-> 项目定位为研究与集成框架。示例场地、阈值和奖励不是官方赛季规则。
-> 当前离线实验尚未证明 IQL 优于 BC 或既有规则策略；评测口径与限制见 [实验基线](docs/benchmarks.md)。
 
 ## 功能
 
@@ -192,7 +190,6 @@ SentryWeave/
 | 规则、HMM、效用权重与标注 | [学习基线](docs/baselines.md) |
 | Docker、Gazebo、GUI 与验收 | [仿真指南](docs/simulation.md) |
 | ROS 接口、TF、实车参数 | [部署指南](docs/deployment.md) |
-| PolarBear / RMU 适配 | [上游集成](docs/integrations.md) |
 | 实验结果与解释边界 | [实验基线](docs/benchmarks.md) |
 | 官方文档与论文 | [参考资料](docs/references.md) |
 
@@ -221,4 +218,4 @@ CI 分别检查纯 Python、CPU PyTorch 和 Jazzy/Harmonic。
 - [Navigator Team · RMUC-OfflineRL](https://github.com/Harkerbest/RMUC-OfflineRL)
 - [Navigation2](https://github.com/ros-navigation/navigation2) 和 [Gazebo](https://gazebosim.org/)
 
-SentryWeave 由未来战队维护，是独立研究项目，不代表 DJI/RoboMaster 官方规则、认证或背书。
+SentryWeave 是独立项目，不代表 RoboMaster 官方规则、认证或背书。
