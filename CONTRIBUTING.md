@@ -14,10 +14,11 @@ python3 -m venv .venv
 ```
 
 算法训练使用单独的 `.venv-rl`，安装步骤见 [入门教程](docs/getting-started.md)。
-ROS 运行使用 Ubuntu 24.04 / Jazzy，推荐先通过 Docker 重现仿真。
+ROS 运行使用 Ubuntu 24.04 / Jazzy，推荐先通过 Docker 运行 ROS 测试。
 
 ## 修改约定
 
+- `main` 只包含决策、强化学习和通用 ROS 接入代码；物理仿真环境与针对特定导航栈的测试不进入 `main`。
 - 决策、特征编码和执行协议放在 `sentry_core`，避免复制到训练脚本或 ROS 回调中。
 - 时间戳表示原始观测时刻；缺失值使用有效位，不能伪装成零血量或已摧毁目标。
 - 模型只能重排合法候选，不能绕过资源、定位、禁区或导航所有权约束。
@@ -47,7 +48,6 @@ ROS 运行使用 Ubuntu 24.04 / Jazzy，推荐先通过 Docker 重现仿真。
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 python3 -m pytest tests -q
-python3 tools/gazebo_acceptance.py --out artifacts/physics
 ```
 
 纯文档修改检查链接、代码块语法和实际 CLI 参数即可。

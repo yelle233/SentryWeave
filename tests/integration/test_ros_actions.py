@@ -1,6 +1,5 @@
 """True rclpy Action integration tests; skipped when the overlay is not sourced."""
 
-import math
 import importlib.util
 import threading
 import time
@@ -24,55 +23,6 @@ def test_ros_codec_preserves_source_time_unknown_fields_and_history(world_factor
     world = world_factory(hp=None, enemy_outpost=None, allies=((1, 14, 4, 1.4, 0.4),))
     restored = world_from_msg(world_to_msg(world))
     assert restored == world
-
-
-def test_ground_truth_calibration_is_not_applied_repeatedly():
-    import rclpy
-    from geometry_msgs.msg import PoseWithCovarianceStamped
-    from nav_msgs.msg import Odometry
-    from rclpy.executors import SingleThreadedExecutor
-    from rclpy.node import Node
-    from rclpy.parameter import Parameter
-    from rclpy.qos import qos_profile_sensor_data
-    from sentry_ros.localization_node import LocalizationNode
-
-    rclpy.init()
-    localizer = LocalizationNode(namespace="calibration_test", parameter_overrides=[
-        Parameter("world_to_map", value=[1., 2., math.pi / 2]),
-    ])
-    driver = Node("calibration_driver", namespace="calibration_test")
-    truth_pub = driver.create_publisher(Odometry, "ground_truth/odom", qos_profile_sensor_data)
-    odom_pub = driver.create_publisher(Odometry, "odom", qos_profile_sensor_data)
-    output = []
-    driver.create_subscription(PoseWithCovarianceStamped, "self_pose", output.append,
-                               qos_profile_sensor_data)
-    truth, odom = Odometry(), Odometry()
-    truth.header.stamp = odom.header.stamp = driver.get_clock().now().to_msg()
-    truth.pose.pose.position.x, truth.pose.pose.position.y = 3., 4.
-    truth.pose.pose.orientation.w = odom.pose.pose.orientation.w = 1.
-    executor = SingleThreadedExecutor()
-    executor.add_node(localizer)
-    executor.add_node(driver)
-    try:
-        # First deliver truth until discovery succeeds, then send odometry repeatedly
-        # without refreshing truth. A cached source pose must remain in world coordinates.
-        deadline = time.monotonic() + 5
-        while len(output) < 1 and time.monotonic() < deadline:
-            truth_pub.publish(truth)
-            odom_pub.publish(odom)
-            executor.spin_once(timeout_sec=0.05)
-        output.clear()
-        for _ in range(20):
-            odom_pub.publish(odom)
-            executor.spin_once(timeout_sec=0.02)
-        assert len(output) >= 2
-        assert all(m.pose.pose.position.x == pytest.approx(-3.) for m in output)
-        assert all(m.pose.pose.position.y == pytest.approx(5.) for m in output)
-    finally:
-        executor.shutdown()
-        localizer.destroy_node()
-        driver.destroy_node()
-        rclpy.shutdown()
 
 
 def test_jazzy_accepts_the_holonomic_controller_configuration(tmp_path):

@@ -1,9 +1,0 @@
-repositories:
-  pb2025_sentry_nav:
-    type: git
-    url: https://github.com/SMBU-PolarBear-Robotics-Team/pb2025_sentry_nav.git
-    version: 9c43e38a902ed21df1960491dcc8423263599f0f
-  rmu_gazebo_simulator:
-    type: git
-    url: https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator.git
-    version: c1ca66f2dbb542d36cd8452dce394ce989ec5225

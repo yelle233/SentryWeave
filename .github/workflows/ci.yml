@@ -18,22 +18,13 @@ jobs:
       - run: pip install -e '.[dev]'
       - run: ruff check src tests tools
       - run: pytest tests -q
-  jazzy-physics:
+  jazzy:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t sentryweave:ci -f docker/Dockerfile .
       - run: docker run --rm sentryweave:ci bash tools/ros_exec.bash python3 -m pytest tests -q
-      - run: |
-          mkdir -p artifacts
-          docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 -v "$PWD/artifacts:/ws/artifacts" \
-            sentryweave:ci bash tools/ros_exec.bash python3 tools/gazebo_acceptance.py --out artifacts/ci-physics
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: physics-evidence
-          path: artifacts/ci-physics
   offline-learning:
     runs-on: ubuntu-24.04
     steps:

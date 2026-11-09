@@ -18,7 +18,7 @@ body:
     id: environment
     attributes:
       label: 环境
-      description: OS、Python、ROS/Nav2/Gazebo、PyTorch、模型 schema 以及代码提交。
+      description: OS、Python、ROS/Nav2、PyTorch、模型 schema 以及代码提交。
     validations:
       required: true
   - type: textarea

@@ -136,12 +136,4 @@ ROS Action 集成（需已经构建并 source 工作区）：
 bash tools/ros_exec.bash python3 -m pytest tests/integration/test_ros_actions.py -q
 ```
 
-物理仿真：
-
-```bash
-bash tools/ros_exec.bash python3 tools/gazebo_acceptance.py --out artifacts/physics
-```
-
-物理验收要求真实激光、里程计、有效 World、禁区掩码以及至少一个 **SUPPORT 导航到位**
-回执；不是只检查进程存在。工具为 ROS domain 和 Gazebo transport 创建隔离，结束时关闭本次启动进程。
-合成数据准确率、轻量场景收益和物理导航验收应分开报告。
+合成数据准确率、轻量场景收益和接入导航栈后的实际导航结果应分开报告。

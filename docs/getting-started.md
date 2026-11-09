@@ -1,7 +1,7 @@
 # 入门：从首次克隆到训练与运行
 
 本教程面向首次使用 SentryWeave 的开发者。主路径为 Ubuntu 24.04 / Python 3.12，
-训练使用独立虚拟环境，ROS 2 Jazzy / Harmonic 通过 Docker 运行。
+训练使用独立虚拟环境，ROS 2 Jazzy 通过 Docker 运行。
 
 源码不附带比赛数据库、训练权重或预构建镜像。完成相应步骤后，这些文件会生成在本地。
 
@@ -41,47 +41,7 @@ python3 -m venv .venv
 任务编码为 HOLD=0、SUPPORT=1、INTERCEPT=2、DEFEND=3、RECOVER=4。
 模型之后只参与这些合法候选的评分，导航执行器仍管理实际移动。
 
-## 3. 在 Docker 中验证物理导航
-
-先确认 Docker 服务和权限：
-
-```bash
-docker version
-```
-
-应同时显示 Client 和 Server。如果全新 Ubuntu 尚未安装 Docker，可使用：
-
-```bash
-sudo apt update
-sudo apt install -y docker.io
-sudo systemctl enable --now docker
-sudo usermod -aG docker "$USER"
-```
-
-修改用户组后注销并重新登录。已有正常工作的 Docker CE 等安装时，无需另外安装 `docker.io`。
-
-构建与验收：
-
-```bash
-docker build -t sentryweave:jazzy -f docker/Dockerfile .
-mkdir -p artifacts
-docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 \
-  -v "$PWD/artifacts:/ws/artifacts" \
-  sentryweave:jazzy bash tools/ros_exec.bash \
-  python3 tools/gazebo_acceptance.py --out artifacts/physics
-```
-
-此步骤不需要训练权重。工具会启动参考仿真，检查传感器、World、禁区掩码与真实导航回执，
-结束后关闭本次进程。正常输出类似 `1 passed`。
-
-```bash
-python3 -m json.tool artifacts/physics/physics.json
-```
-
-检查 `navigation_arrivals`、`arrived_task_types`、`execution_faults`。
-没有 GUI 是正常的；GUI 与连续运行方法见 [仿真指南](simulation.md)。
-
-## 4. 建立训练环境
+## 3. 建立训练环境
 
 术语：
 
@@ -95,7 +55,7 @@ python3 -m json.tool artifacts/physics/physics.json
 | validation / test | 验证集负责模型选择，测试集负责独立报告 |
 
 BC 模仿日志；IQL 使用奖励学习价值和策略；DT 根据历史和回报条件生成动作。
-离线训练不需要启动 Gazebo，也不控制真实机器人。
+离线训练不需要 ROS 或 Docker，也不控制真实机器人。
 
 ```bash
 sudo apt install -y python3-venv python3-pip curl
@@ -145,7 +105,7 @@ PyTorch wheel 带有所需 CUDA 运行库，系统仍需兼容驱动。
 `--device auto` 会选择可用 CUDA，否则使用 CPU。
 应预留数十 GB 给依赖、Docker 镜像和实验产物；数据库本身约 1.10 GiB。
 
-## 5. 下载和构建数据集
+## 4. 下载和构建数据集
 
 ```bash
 .venv-rl/bin/sentry-rl fetch --out artifacts/rl/raw
@@ -171,7 +131,7 @@ artifacts/rl/dataset/
 已存在 `metadata.json` 时，直接 inspect 复用，或选择新的构建输出目录。
 不要把相邻帧随机打散后再划分训练/测试。
 
-## 6. 用小训练检查流程
+## 5. 用小训练检查流程
 
 ```bash
 .venv-rl/bin/sentry-rl train \
@@ -190,7 +150,7 @@ python3 -m json.tool artifacts/rl/runs/smoke-bc/report.json
 `optimizer_steps` 应为 300。小训练只检查流程，不作为策略效果证据。
 如果目录已有完整实验，改用新 `--out`，不要删除整个数据目录。
 
-## 7. 训练 BC → IQL，并加入 DT 对照
+## 6. 训练 BC → IQL，并加入 DT 对照
 
 BC：
 
@@ -236,7 +196,7 @@ tail -f artifacts/rl/runs/iql-seed7/metrics.jsonl
 - 显存不足时降低 batch；DT 还可缩短 context，并用新目录记录参数。
 - 训练更久不一定更好，使用验证集选出的 `actor.json`。
 
-## 8. 识别模型产物
+## 7. 识别模型产物
 
 | 文件 | 用途 |
 |---|---|
@@ -251,7 +211,7 @@ tail -f artifacts/rl/runs/iql-seed7/metrics.jsonl
 `best_step=1000`、`optimizer_steps=30000` 表示后续更新未改善选定验证指标，不能据此认为训练提前停止。
 不同算法/随机种子应使用不同实验目录；评测用相同输出目录时会更新旧报告。
 
-## 9. 独立评测与轻量闭环
+## 8. 独立评测与轻量闭环
 
 ```bash
 .venv-rl/bin/sentry-rl evaluate \
@@ -283,57 +243,66 @@ tail -f artifacts/rl/runs/iql-seed7/metrics.jsonl
 这是脚本化运动学场景，不是完整比赛结果。
 FQE 的使用和限制见 [离线强化学习](offline-rl.md)。
 
-## 10. 在物理仿真中加载自己的模型
+## 9. 构建 ROS 2 决策链
 
-先完成第 3 章的 Docker 构建，再执行：
-
-```bash
-docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 \
-  -v "$PWD/artifacts:/ws/artifacts" \
-  sentryweave:jazzy bash tools/ros_exec.bash \
-  python3 tools/gazebo_acceptance.py \
-  --rl-model /ws/artifacts/rl/runs/iql-seed7/actor.json \
-  --rl-blend 0.25 --allow-domain-transfer \
-  --out artifacts/rl/physics
-```
-
-宿主机 `artifacts/...` 在容器中对应 `/ws/artifacts/...`。
-`rl_used_decisions>0` 表示模型实际参与了评分；验收还要求 SUPPORT 导航到位。
-未通过时检查日志，区分环境故障、接口问题和策略选择；不要仅增加等待时间来掩盖行为问题。
-
-使用相同配置与模型回放：
+ROS 2 Jazzy 与 Nav2 依赖都在 Docker 镜像中，宿主机不需要安装 ROS。先确认 Docker 服务和权限：
 
 ```bash
-.venv-rl/bin/sentry-rl replay \
-  --actor artifacts/rl/runs/iql-seed7/actor.json \
-  --trace artifacts/rl/physics/decisions.jsonl \
-  --config src/sentry_bringup/config/tactics.yaml \
-  --blend 0.25 --allow-domain-transfer
+docker version
 ```
 
-使用蓝方变换时加 `--mirror`；若原运行加载 HMM/效用模型，也提供对应参数。
+应同时显示 Client 和 Server。如果全新 Ubuntu 尚未安装 Docker，可使用：
 
-## 11. 连续运行与影子模式
+```bash
+sudo apt update
+sudo apt install -y docker.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+```
+
+修改用户组后注销并重新登录。已有正常工作的 Docker CE 等安装时，无需另外安装 `docker.io`。
+
+构建镜像，并在容器中运行测试：
+
+```bash
+docker build -t sentryweave:main -f docker/Dockerfile .
+docker run --rm sentryweave:main bash tools/ros_exec.bash python3 -m pytest tests -q
+```
+
+容器中会实际运行 ROS Action 与 Nav2 控制器配置测试；镜像不含 PyTorch，训练相关测试显示 skipped。
+代码修改后需要重新构建镜像。
+
+`decision.launch.py` 启动 `world_model`、`decision`、`executor` 和 `velocity_guard`，
+不包含定位、感知、Nav2 或仿真。查看全部参数：
+
+```bash
+docker run --rm sentryweave:main bash tools/ros_exec.bash \
+  ros2 launch sentry_bringup decision.launch.py --show-args
+```
+
+## 10. 在决策链中加载模型
 
 ```bash
 mkdir -p artifacts/live
-docker run --rm -it --name sentryweave-demo \
-  -e LIBGL_ALWAYS_SOFTWARE=1 \
+docker run --rm -it --name sentryweave-decision \
   -v "$PWD/artifacts:/ws/artifacts" \
-  sentryweave:jazzy bash tools/ros_exec.bash \
-  ros2 launch sentry_bringup simulation.launch.py \
-  scenario:=team_push \
+  sentryweave:main bash tools/ros_exec.bash \
+  ros2 launch sentry_bringup decision.launch.py \
   rl_model:=/ws/artifacts/rl/runs/iql-seed7/actor.json \
   rl_blend:=0.25 rl_allow_transfer:=true \
   trace_path:=/ws/artifacts/live/decisions.jsonl
 ```
 
+宿主机 `artifacts/...` 在容器中对应 `/ws/artifacts/...`。
+日志出现 `Decision ready: intent=rule, goal=iql` 表示模型已加载；
+`rl_allow_transfer` 显式允许 28×15 m 官方数据模型用于默认 `tactics.yaml` 的 20×12 m 示例场地。
+尚未接入定位、裁判和 Nav2 时，任务保持 HOLD，运动许可为 false。
+
 第二个终端检查：
 
 ```bash
-docker exec sentryweave-demo bash tools/ros_exec.bash ros2 topic echo /sentry/tactical/task --once
-docker exec sentryweave-demo bash tools/ros_exec.bash ros2 topic echo /sentry/motion/permit --once
-docker exec sentryweave-demo bash tools/ros_exec.bash ros2 lifecycle get /sentry/bt_navigator
+docker exec sentryweave-decision bash tools/ros_exec.bash ros2 topic echo /sentry/tactical/task --once
+docker exec sentryweave-decision bash tools/ros_exec.bash ros2 topic echo /sentry/motion/permit --once
 ```
 
 查看 `tactical/trace` 或 JSONL 中的 `policy_info`，了解建议、模型 ID 和回退原因。
@@ -342,12 +311,25 @@ docker exec sentryweave-demo bash tools/ros_exec.bash ros2 lifecycle get /sentry
 将 `rl_blend:=0.0` 可启用影子模式；**原规则仍可驱动机器人**。
 完全不控制机器人时使用离线回放。
 更换模型后重启节点，不会自动热加载磁盘文件。
+在运行终端按 `Ctrl+C` 停止；也可在第二个终端发送 SIGINT：
 
 ```bash
-docker stop --timeout 10 sentryweave-demo
+docker kill --signal=SIGINT sentryweave-decision
 ```
 
-## 12. 进入实车对接
+使用相同配置与模型回放记录：
+
+```bash
+.venv-rl/bin/sentry-rl replay \
+  --actor artifacts/rl/runs/iql-seed7/actor.json \
+  --trace artifacts/live/decisions.jsonl \
+  --config src/sentry_bringup/config/tactics.yaml \
+  --blend 0.25 --allow-domain-transfer
+```
+
+使用蓝方变换时加 `--mirror`；若原运行加载 HMM/效用模型，也提供对应参数。
+
+## 11. 接入实车与导航栈
 
 设备侧需要定位、里程计、障碍输入、定位健康和规范化雷达/裁判消息。
 模型只消费这些状态，不直接解析官方串口字节或相机图片。
@@ -359,6 +341,10 @@ docker stop --timeout 10 sentryweave-demo
 3. 底盘速度、加速度、footprint、速度仲裁和硬件超时；
 4. 比赛阶段、资源有效位和补给条件；
 5. 训练坐标与实际地图的单位、轴向、原点和侧别。
+
+已有导航栈时只启动 `decision.launch.py`：导航栈提供 `navigate_to_pose` 与 `compute_path_to_pose`，
+速度输出接到 `nav_cmd_vel`，由 `velocity_guard` 独占 `cmd_vel`。
+`robot.launch.py` 则同时启动参考 Nav2 与决策链。
 
 模型尺寸检查失败时，应处理坐标/数据域问题，不能只修改数字绕过检查。
 2027 等新赛季即使场地尺寸相同，也需要重新验证地图、规则和数据分布。
@@ -380,4 +366,4 @@ docker stop --timeout 10 sentryweave-demo
 | 暂停/重置仿真后停止 | 检查时钟与执行故障，恢复后按部署文档清理或重启 |
 
 当前结果支持研究、影子记录与受约束实验，尚不支持直接宣称战术收益提升。
-更多说明见 [实验基线](benchmarks.md)、[仿真](simulation.md)、[离线学习](offline-rl.md)。
+更多说明见 [实验基线](benchmarks.md)、[部署](deployment.md)、[离线学习](offline-rl.md)。

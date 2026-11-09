@@ -136,7 +136,7 @@ FQE 仅支持同域 Markov BC/IQL，在训练数据拟合 critic，在测试片�
 示例场地与官方数据尺寸不同，运行集成实验需要显式选择域迁移：
 
 ```bash
-ros2 launch sentry_bringup simulation.launch.py \
+ros2 launch sentry_bringup decision.launch.py \
   rl_model:="$PWD/artifacts/rl/runs/iql-seed7/actor.json" \
   rl_blend:=0.25 rl_allow_transfer:=true \
   trace_path:="$PWD/artifacts/rl/decisions.jsonl"

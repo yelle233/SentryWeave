@@ -17,7 +17,7 @@ TF 主题为 `/sentry/tf` 与 `/sentry/tf_static`，帧名不重复添加 namesp
 | Topic / TF | 消息 | 约定 |
 |---|---|---|
 | `perception/tracks` | `sentry_interfaces/ObservationArray` | 每个元素有稳定 ID、阵营、源 stamp、frame、位姿、质量；速度可选 |
-| `self_pose` | `geometry_msgs/PoseWithCovarianceStamped` | `self_from_tf=false` 时使用，仿真默认此路径 |
+| `self_pose` | `geometry_msgs/PoseWithCovarianceStamped` | `self_from_tf=false` 时使用 |
 | `map -> odom -> base_link` | TF | `self_from_tf=true` 时使用最新有时间戳的定位链 |
 | `localization_ok` | `std_msgs/Bool` | 实车必须持续发布；false 或超时会撤销自身有效性 |
 | `referee/state` | `sentry_interfaces/RefereeState` | phase 与各字段有效位必须明确设置 |
@@ -85,7 +85,7 @@ ros2 launch sentry_bringup robot.launch.py \
   trace_path:=/absolute/path/logs/match.jsonl
 ```
 
-`robot.launch.py` 默认启用 Jazzy MPPI Omni；参考仿真使用差速 RPP。
+`robot.launch.py` 默认叠加 Jazzy MPPI Omni；`nav2.yaml` 本身是差速 RPP 参考配置。
 控制器、机器人 radius/footprint、最大速度/加速度、速度门控上限和障碍配置必须按实车校准，
 尤其是云台自旋时速度所在的参考坐标系。
 

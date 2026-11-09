@@ -35,7 +35,7 @@ include = ["sentry_core*", "sentry_training*", "sentry_ros*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src/sentry_core", "src/sentry_training", "src/sentry_ros", "tools"]
-markers = ["ros: requires a built ROS 2 Jazzy workspace", "gazebo: requires Harmonic and Nav2"]
+markers = ["ros: requires a built ROS 2 Jazzy workspace"]
 
 [tool.ruff]
 line-length = 100

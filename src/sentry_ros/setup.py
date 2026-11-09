@@ -12,7 +12,5 @@ setup(
         "decision = sentry_ros.decision_node:main",
         "executor = sentry_ros.executor_node:main",
         "velocity_guard = sentry_ros.guard_node:main",
-        "scenario = sentry_ros.scenario_node:main",
-        "sim_localization = sentry_ros.localization_node:main",
     ]},
 )

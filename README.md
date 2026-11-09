@@ -27,7 +27,7 @@ SentryWeave 是面向 RoboMaster 哨兵的自主协同决策与离线学习框�
 - **协同决策**：概率意图、分区威胁、合法候选点、效用评分与任务防抖。
 - **离线学习**：官方 SQLite 导入、整场分组划分、BC/IQL/DT 训练、独立评测和模型导出。
 - **执行约束**：Nav2 Goal 生命周期管理、取消终态确认、任务租约、禁区过滤和速度门控。
-- **仿真与回放**：轻量运动学场景、JSONL/rosbag2 回放、Harmonic + Nav2 物理导航验收。
+- **仿真与回放**：轻量运动学场景、JSONL/rosbag2 回放。
 - **部署接口**：Python/ROS 2 模块化实现，NumPy 模型推理，差速参考配置与 MPPI Omni 配置。
 
 ```mermaid
@@ -51,10 +51,10 @@ git clone https://github.com/yelle233/SentryWeave.git
 cd SentryWeave
 ```
 
-支持环境为 **Ubuntu 24.04、Python 3.12、ROS 2 Jazzy、Gazebo Harmonic**。
-纯 Python 决策与训练不需要安装 ROS；Docker 路线包含完整仿真依赖。
+支持环境为 **Ubuntu 24.04、Python 3.12、ROS 2 Jazzy**。
+纯 Python 决策与训练不需要安装 ROS；Docker 路线包含 Jazzy 与 Nav2 运行依赖。
 
-仓库发布源码、配置、测试和汇总实验指标。**官方数据库、第三方场地资产、训练权重及预构建镜像不随源码分发**，
+仓库发布源码、配置、测试和汇总实验指标。**官方数据库、训练权重及预构建镜像不随源码分发**，
 分别通过下载脚本、训练命令和 Dockerfile 生成。
 
 ## 快速开始：不依赖模型的决策演示
@@ -73,34 +73,22 @@ python3 -m venv .venv
 该示例展示进攻机会与防区威胁同时存在时的任务选择。
 输出包含任务序列、覆盖指标、切换次数和执行结果；没有 ROS 的环境会明确跳过 ROS 专用测试。
 
-## 快速开始：Jazzy / Harmonic
+## 接入 ROS 2 决策链
 
-在仓库根目录构建镜像：
-
-```bash
-docker build -t sentryweave:jazzy -f docker/Dockerfile .
-mkdir -p artifacts
-docker run --rm -it \
-  -e LIBGL_ALWAYS_SOFTWARE=1 \
-  -v "$PWD/artifacts:/ws/artifacts" \
-  sentryweave:jazzy bash tools/ros_exec.bash \
-  ros2 launch sentry_bringup simulation.launch.py \
-  scenario:=team_push trace_path:=/ws/artifacts/decisions.jsonl
-```
-
-默认无 GUI，使用软件渲染；不要求 NVIDIA 容器支持。参考机器人包含差速底盘、激光和里程计，
-队友与敌方状态由场景节点注入。
-
-自动验证“队友推进 → 支援任务 → 实际导航到位”：
+在仓库根目录构建镜像，启动世界模型、决策、执行器和速度门控：
 
 ```bash
-docker run --rm -e LIBGL_ALWAYS_SOFTWARE=1 \
-  -v "$PWD/artifacts:/ws/artifacts" \
-  sentryweave:jazzy bash tools/ros_exec.bash \
-  python3 tools/gazebo_acceptance.py --out artifacts/physics
+docker build -t sentryweave:main -f docker/Dockerfile .
+docker run --rm -it sentryweave:main bash tools/ros_exec.bash \
+  ros2 launch sentry_bringup decision.launch.py
 ```
 
-结果保存在 `artifacts/physics/`。GUI、本机 colcon 构建及故障排查见 [仿真指南](docs/simulation.md)。
+本机已安装 Jazzy 与 Nav2 时，也可 source `/opt/ros/jazzy/setup.bash` 后执行
+`colcon build --symlink-install`，再 source `install/setup.bash` 运行同一 launch。
+
+决策链不包含定位、感知和导航；未接入输入时任务保持 HOLD，运动许可为 false。
+接入自己的导航栈时，需要提供 Nav2 Action、`perception/tracks`、`referee/state` 和 TF，
+并把导航速度接到 `nav_cmd_vel`，由速度门控独占 `cmd_vel`。接线方法见 [部署指南](docs/deployment.md)。
 
 ## 训练离线强化学习策略
 
@@ -141,13 +129,13 @@ python3 -m venv .venv-rl
   --out artifacts/rl/evaluation
 ```
 
-完成训练后，在仿真中加载模型：
+完成训练后，在决策链中加载模型：
 
 ```bash
-docker run --rm -it -e LIBGL_ALWAYS_SOFTWARE=1 \
+docker run --rm -it \
   -v "$PWD/artifacts:/ws/artifacts" \
-  sentryweave:jazzy bash tools/ros_exec.bash \
-  ros2 launch sentry_bringup simulation.launch.py \
+  sentryweave:main bash tools/ros_exec.bash \
+  ros2 launch sentry_bringup decision.launch.py \
   rl_model:=/ws/artifacts/rl/runs/iql-seed7/actor.json \
   rl_blend:=0.25 rl_allow_transfer:=true
 ```
@@ -167,10 +155,9 @@ SentryWeave/
 │   ├── sentry_training/     # HMM / BC / IQL / DT、评测与回放
 │   ├── sentry_interfaces/   # ROS 消息
 │   ├── sentry_ros/          # TF、QoS、节点和 Nav2 Action 适配
-│   ├── sentry_bringup/      # launch、参数、导航行为树
-│   └── sentry_gazebo/       # Harmonic 参考场地与机器人
-├── tests/                  # 单元、ROS Action 与物理集成测试
-├── tools/                  # 仿真验收、资产导入、坐标标定
+│   └── sentry_bringup/      # launch、参数、导航行为树
+├── tests/                  # 单元与 ROS Action 集成测试
+├── tools/                  # 加载 Jazzy 与工作区环境后执行命令
 ├── integrations/           # 固定上游版本与许可信息
 ├── benchmarks/             # 可公开的实验汇总，不含原始比赛轨迹
 ├── docs/                   # 开发者与部署文档
@@ -188,7 +175,6 @@ SentryWeave/
 | 数据流、决策与执行协议 | [系统架构](docs/architecture.md) |
 | BC / IQL / DT 与官方数据 | [离线强化学习](docs/offline-rl.md) |
 | 规则、HMM、效用权重与标注 | [学习基线](docs/baselines.md) |
-| Docker、Gazebo、GUI 与验收 | [仿真指南](docs/simulation.md) |
 | ROS 接口、TF、实车参数 | [部署指南](docs/deployment.md) |
 | 实验结果与解释边界 | [实验基线](docs/benchmarks.md) |
 | 官方文档与论文 | [参考资料](docs/references.md) |
@@ -201,7 +187,7 @@ SentryWeave/
 ```
 
 离线学习测试需要 `.[rl]`，ROS 测试需要已构建并 source 的 Jazzy 工作区。
-CI 分别检查纯 Python、CPU PyTorch 和 Jazzy/Harmonic。
+CI 分别检查纯 Python、CPU PyTorch 和 Jazzy。
 
 欢迎提交 [Issue](https://github.com/yelle233/SentryWeave/issues) 或 Pull Request。
 开发环境、提交范围与验证要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
@@ -213,9 +199,7 @@ CI 分别检查纯 Python、CPU PyTorch 和 Jazzy/Harmonic。
 
 项目参考并感谢：
 
-- [SMBU PolarBear · pb2025_sentry_nav](https://github.com/SMBU-PolarBear-Robotics-Team/pb2025_sentry_nav)
-- [SMBU PolarBear · rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)
 - [Navigator Team · RMUC-OfflineRL](https://github.com/Harkerbest/RMUC-OfflineRL)
-- [Navigation2](https://github.com/ros-navigation/navigation2) 和 [Gazebo](https://gazebosim.org/)
+- [Navigation2](https://github.com/ros-navigation/navigation2)
 
 SentryWeave 是独立项目，不代表 RoboMaster 官方规则、认证或背书。

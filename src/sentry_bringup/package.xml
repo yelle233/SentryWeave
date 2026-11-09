@@ -5,9 +5,9 @@
   <maintainer email="1376982098@qq.com">yelle233 (未来战队)</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <exec_depend>sentry_ros</exec_depend><exec_depend>sentry_gazebo</exec_depend>
+  <exec_depend>sentry_ros</exec_depend>
   <exec_depend>sentry_core</exec_depend><exec_depend>python3-yaml</exec_depend>
   <exec_depend>nav2_bringup</exec_depend><exec_depend>nav2_common</exec_depend>
-  <exec_depend>launch_ros</exec_depend><exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -4,12 +4,9 @@
 
 | 项目 | 用途 | 固定参考版本 |
 |---|---|---|
-| [pb2025_sentry_nav](https://github.com/SMBU-PolarBear-Robotics-Team/pb2025_sentry_nav) | 导航配置与地图集成 | `9c43e38a902ed21df1960491dcc8423263599f0f` |
-| [rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator) | Fortress 场地资产迁移 | `c1ca66f2dbb542d36cd8452dce394ce989ec5225` |
 | [RMUC-OfflineRL](https://github.com/Harkerbest/RMUC-OfflineRL) | 离线学习方法与数据格式参考 | `064d8336edd18053ce320202187862dce010b5c7` |
 
-版本清单分别保存在 [`integrations/polarbear/`](../integrations/polarbear/) 和
-[`integrations/rmuc_offlinerl/`](../integrations/rmuc_offlinerl/)。
+版本清单保存在 [`integrations/rmuc_offlinerl/`](../integrations/rmuc_offlinerl/)。
 许可证与数据使用条件见 [第三方声明](../THIRD_PARTY_NOTICES.md)。
 
 ## 官方数据
@@ -25,7 +22,7 @@
 下载脚本核对公开附件 MD5 和 SQLite SHA-256，具体值见
 [`source.json`](../integrations/rmuc_offlinerl/source.json) 及脚本中的固定数据库校验值。
 
-## ROS / Nav2 / Gazebo
+## ROS / Nav2
 
 - [ROS 2 Jazzy 安装](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html)
 - [ROS Action 设计](https://design.ros2.org/articles/actions.html)
@@ -33,8 +30,6 @@
 - [Nav2 Iron → Jazzy](https://docs.nav2.org/jazzy/configuration_and_development/migration_guides/iron/Iron/)
 - [Jazzy BT Navigator](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/configuring_bt_navigator/)
 - [Jazzy KeepoutFilter](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/costmap_2d/costmap_filters/keepout_filter/)
-- [Nav2 Gazebo setup](https://docs.nav2.org/jazzy/configuration_and_development/first_time_robot_setup_guide/gazebo/)
-- [Gazebo / ROS 推荐组合](https://gazebosim.org/docs/harmonic/ros_installation/)
 
 Jazzy 使用 BehaviorTree.CPP 4 系列，内置 Nav2 BT 库由系统注册。
 本工程显式使用 Twist；不要直接套用后续发行版的 TwistStamped 默认值。
