@@ -95,7 +95,7 @@ class DecisionEngine:
         for zone in config.zones:
             if zone.intent != IntentType.DEFEND_BASE:
                 continue
-            best, best_priority = Threat(zone.name, 0.0, None, None), 0.0
+            best, best_priority, top = Threat(zone.name, 0.0, None, None), 0.0, 0.0
             for enemy in world.enemies:
                 status = view.robot(Team.ENEMY, enemy.robot_id)
                 if status is not None and status.known_alive is False:
@@ -124,6 +124,7 @@ class DecisionEngine:
                           or bool(zone.polygon) and zone.contains(enemy.position))
                 factor = 1.0 if inside else 0.55 + 0.45 * approach
                 score = min(1., weight * zone.importance * math.exp(-eta / 8) * factor)
+                top = max(top, score)
                 ratio = status.hp_ratio if status is not None else None
                 # Health re-orders targets only when known; unknown is neither low nor full.
                 priority = score + (config.enemy_low_hp_bonus * (1 - ratio)
@@ -137,7 +138,9 @@ class DecisionEngine:
                 status = view.robot(Team.ENEMY, best.enemy_id)
                 if status is None or status.hp_ratio is None:
                     self._degraded.append(f"ENEMY_HP_UNKNOWN:{best.enemy_id}")
-            result.append(best)
+            # Health only picks the target (and its ETA). The zone's threat, and so its
+            # urgency, is always the largest per-enemy threat.
+            result.append(replace(best, score=top))
         return tuple(result)
 
     def _candidates(self, world, intents, threats, report=None):

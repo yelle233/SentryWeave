@@ -303,3 +303,31 @@ def test_missing_info_parameters_are_validated(config):
             validate_config(replace(config, **change))
     valid = validate_config(replace(config, expected_allies=3, expected_enemies=4))
     assert (valid.expected_allies, valid.expected_enemies) == (3, 4)
+
+
+def test_known_low_enemy_hp_picks_the_target_but_never_lowers_the_zone_threat(expected):
+    from sentry_core.model import RobotStatus, Team, TaskType
+    from sentry_core.policy import DecisionEngine
+
+    # Raider 11 (full HP) alone is an urgent base threat. Raider 12, further out, alone is
+    # not, but at 10 % HP it is the better target.
+    raid = build(expected, enemies=((11, 6.6, 6.0, -1.0, 0.0), (12, 7.8, 6.0, -1.0, 0.0)),
+                 enemy_hp=200.0)
+    raid = replace(raid, robots={**raid.robots,
+                                 12: RobotStatus(12, Team.ENEMY, NOW, 20.0, 200.0)})
+    alone = {e.robot_id: decide(expected, replace(raid, enemies=(e,))).threats[0]
+             for e in raid.enemies}
+    assert alone[11].score >= expected.urgent_threat > alone[12].score
+    decision = decide(expected, raid)
+    threat = decision.threats[0]
+    assert threat.enemy_id == 12 and threat.eta == pytest.approx(alone[12].eta)
+    assert threat.score == pytest.approx(max(a.score for a in alone.values()))
+    assert decision.task.kind == TaskType.INTERCEPT and decision.task.target_id == 12
+    assert decision.task.urgent
+    # While supporting the teammate, the raid preempts at once instead of waiting out the
+    # minimum hold.
+    engine = DecisionEngine(expected, session_id="test")
+    assert engine.step(build(expected)).task.kind == TaskType.SUPPORT
+    response = engine.step(raid)
+    assert response.arbitration == "URGENT_PREEMPT"
+    assert response.task.kind == TaskType.INTERCEPT and response.task.target_id == 12
