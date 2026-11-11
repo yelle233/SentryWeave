@@ -155,6 +155,36 @@ def test_zero_blend_logs_shadow_proposal_without_changing_decision(config, world
     assert not shadow.policy_info["used"]
 
 
+def test_zero_blend_never_offers_a_subgoal_even_when_it_is_the_closest_goal(config, world_factory,
+                                                                            tmp_path):
+    from sentry_core.geometry import TacticalMap
+    from sentry_core.model import Vec2
+    from sentry_core.policy import DecisionEngine
+    from sentry_core.rl_policy import GoalPrior
+
+    path, ally = actor_file(tmp_path, (0.04, 0.)), ((1, 14, 4, 1.4, 0.4),)
+    worlds = [world_factory(now=now, allies=ally, self_position=(x, 6.0))
+              for now, x in ((10.0, 3.0), (10.5, 3.4), (11.0, 3.8))]
+    # The 0.8 m hint is legal (its own projection), closer than every rule goal, and
+    # offered as a sub-goal at the default blend.
+    active = DecisionEngine(config, goal_prior=GoalPrior.load(path, config)).step(worlds[0])
+    own, proposal = worlds[0].self_track.position, Vec2(*active.policy_info["proposal"])
+    assert TacticalMap(config).legal(proposal)
+    assert any(c.goal_id == "rl_subgoal" for c in active.candidates)
+    assert all(own.distance(proposal) < own.distance(c.goal) for c in active.candidates
+               if c.goal is not None and c.goal_id != "rl_subgoal")
+    shadow = DecisionEngine(config, session_id="test",
+                            goal_prior=GoalPrior.load(path, config, blend=0.))
+    rule = DecisionEngine(config, session_id="test")
+    for world in worlds:
+        decision, expected = shadow.step(world), rule.step(world)
+        assert not any(c.goal_id == "rl_subgoal" for c in decision.candidates)
+        assert (decision.task.key, decision.task.goal) == (expected.task.key, expected.task.goal)
+        assert decision.arbitration == expected.arbitration
+        assert "subgoal" not in decision.policy_info
+        assert decision.policy_info["status"] == "SHADOW" and not decision.policy_info["used"]
+
+
 def test_reach_limit_applies_to_both_proposal_and_candidate_waypoints(config, world_factory, tmp_path):
     from sentry_core.policy import DecisionEngine
     from sentry_core.rl_policy import GoalPrior

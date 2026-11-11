@@ -137,12 +137,21 @@ class TacticalMap:
                 return False
         return True
 
+    @lru_cache(maxsize=4096)
     def _visible(self, p: Vec2) -> np.ndarray:
-        """Which graph corners a legal point sees through legal straight segments."""
+        """Which graph corners a legal point sees through legal straight segments.
+
+        Memoized per exact point: every route, batch distance and RL waypoint query of a
+        cycle tests the same goals against every polygon, and fixed goals repeat across
+        cycles. The shared result is read-only.
+        """
         if not len(self._nodes):
-            return np.zeros(0, dtype=bool)
-        origin = np.repeat(np.array([[p.x, p.y]]), len(self._nodes), axis=0)
-        return ~self._blocked(origin, self._nodes)
+            seen = np.zeros(0, dtype=bool)
+        else:
+            origin = np.repeat(np.array([[p.x, p.y]]), len(self._nodes), axis=0)
+            seen = ~self._blocked(origin, self._nodes)
+        seen.flags.writeable = False
+        return seen
 
     @lru_cache(maxsize=512)
     def _tree(self, root: Vec2):

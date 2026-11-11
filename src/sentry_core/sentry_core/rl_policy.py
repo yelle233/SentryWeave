@@ -148,9 +148,15 @@ class GoalPrior:
 
     The proposal is projected onto the nearest legal, reachable position. That
     projected sub-goal is offered as one extra candidate that inherits the task of
-    the best non-urgent SUPPORT/DEFEND rule candidate; the model never changes
-    urgency, moves rule candidates, or bypasses rule filters. DT context records
-    observed past displacement, not unexecuted plans.
+    the best non-urgent SUPPORT/DEFEND rule candidate; a sub-goal being executed
+    keeps its own task while that task stays feasible. It is blended like every rule
+    candidate, with its rule part recomputed for its position and the learned part of
+    the rule candidate it inherits from, never its own agreement with the proposal.
+    A chosen sub-goal stays a candidate at its goal while the proposal cannot steer
+    (for example once it is reached), so normal hysteresis decides when to leave it.
+    With blend 0 the proposal is only recorded. The model never changes urgency,
+    moves rule candidates, or bypasses rule filters. DT context records observed past
+    displacement, not unexecuted plans.
     """
 
     def __init__(self, model, config, blend=0.25, mirror=None, allow_transfer=False):
@@ -231,7 +237,11 @@ class GoalPrior:
                         else "OUT_OF_FIELD")
         self.last_update, self.generation = world.stamp, own.generation
 
-    def rank(self, world, candidates, arena, current_key=None):
+    def rank(self, world, candidates, arena, current_key=None, *, current_goal=None):
+        """Blend rule utilities with the proposal and offer at most one RL sub-goal.
+
+        ``current_key`` and ``current_goal`` describe the task being executed.
+        """
         self.info = {
             "algorithm": self.model.payload["algorithm"], "model_id": self.model_id,
             "dataset_id": self.model.payload.get("provenance", {}).get("dataset_id"),
@@ -253,20 +263,22 @@ class GoalPrior:
         if self.blend == 0:
             self.info.update(status="SHADOW", proposal_status=self._status)
             return candidates
-        if self._status != "READY":
-            return candidates
         own = world.self_track.position
+        executed = (current_goal if current_key is not None and current_key[3] == SUBGOAL_ID
+                    else None)
+        if self._status != "READY":
+            return self._keep(own, candidates, arena, executed, current_key)
         direction = Vec2(self.proposal.x - self.proposal_origin.x,
                          self.proposal.y - self.proposal_origin.y)
         remaining = Vec2(self.proposal.x - own.x, self.proposal.y - own.y)
         if direction.norm < 0.3:
             self.info["status"] = "NO_DIRECTION"
-            return candidates
+            return self._keep(own, candidates, arena, executed, current_key)
         if (self.proposal_satisfied or remaining.norm <= 0.5
                 or direction.x * remaining.x + direction.y * remaining.y <= 0):
             self.proposal_satisfied = True
             self.info["status"] = "PROPOSAL_REACHED"
-            return candidates
+            return self._keep(own, candidates, arena, executed, current_key)
         # Match progress lengths. A short human movement suggestion must not be
         # compared to a forced maximum-speed waypoint on every distant route.
         travel = min(remaining.norm, self.config.nominal_speed * max(0.2, self.spec.horizon - age))
@@ -276,36 +288,70 @@ class GoalPrior:
         projected = arena.nearest_legal(comparison_goal, anchor=own)
         if projected is None:
             self.info["status"] = "NO_LEGAL_PROJECTION"
-            return candidates
+            return self._keep(own, candidates, arena, executed, current_key)
         self.info.update(projection_distance_m=travel, projected_goal=[projected.x, projected.y])
 
-        def blended(candidate):
-            waypoint = arena.advance_from(own, candidate.goal, travel)
+        def blended(candidate, route=None):
+            """``route``: the goal whose route is compared with the proposal (default: own)."""
+            waypoint = arena.advance_from(own, candidate.goal if route is None else route, travel)
             score = math.exp(-0.5 * (waypoint.distance(projected) / radius) ** 2)
             return replace(candidate, utility=(1 - self.blend) * candidate.utility + self.blend * score,
                            rule_utility=candidate.utility, learned_utility=score)
 
         ranked = [c if c.kind == TaskType.HOLD or c.goal is None else blended(c) for c in candidates]
-        subgoal = self._subgoal(own, candidates, arena, projected, current_key)
-        if subgoal is not None:
-            ranked.append(blended(subgoal))
-            self.info["subgoal"] = [projected.x, projected.y]
+        made = (self._subgoal(own, candidates, arena, projected, current_key)
+                or self._subgoal(own, candidates, arena, executed, current_key, keep=True))
+        if made is not None:
+            subgoal, base = made
+            # The sub-goal lies on the proposal, so its own route would agree with it by
+            # construction (score ~1). Like every rule candidate it is scored on a rule
+            # route instead: that of the candidate whose task it inherits, which gives it
+            # the base's learned value. It only differs from the base by its rule part.
+            ranked.append(blended(subgoal, route=base.goal))
+            self._record(subgoal, base)
         self.info["used"] = True
         return ranked
 
-    def _subgoal(self, own, candidates, arena, projected, current_key):
-        if any(c.urgent for c in candidates):
+    def _keep(self, own, candidates, arena, executed, current_key):
+        """Keep an executed sub-goal as a candidate while the proposal cannot steer.
+
+        Reaching the proposal (or losing its direction or projection) does not end the
+        sub-goal's task: while that task stays feasible it remains a candidate at its own
+        goal, rule-scored like every other candidate this cycle, so normal hysteresis
+        decides when to leave it.
+        """
+        made = self._subgoal(own, candidates, arena, executed, current_key, keep=True)
+        if made is None:
+            return candidates
+        self._record(*made)
+        return [*candidates, made[0]]
+
+    def _record(self, subgoal, base):
+        self.info.update(subgoal=[subgoal.goal.x, subgoal.goal.y], subgoal_base=base.goal_id)
+
+    def _subgoal(self, own, candidates, arena, position, current_key, keep=False):
+        """The sub-goal candidate at ``position`` and the rule candidate it inherits from.
+
+        It takes the task and value features of a non-urgent SUPPORT/DEFEND rule
+        candidate: of the executed sub-goal's task while that task is still feasible,
+        otherwise (unless ``keep``) of the best one. Travel and switching are
+        recomputed for ``position``.
+        """
+        if position is None or any(c.urgent for c in candidates):
             return None
         pool = [c for c in candidates if c.kind in SUBGOAL_KINDS and c.goal is not None]
+        executed = current_key is not None and current_key[3] == SUBGOAL_ID
+        same = [c for c in pool if executed and c.key[:3] == current_key[:3]]
+        pool = same or ([] if keep else pool)
         if not pool:
             return None
         base = max(pool, key=lambda c: (c.utility, c.goal_id))
-        length = arena.distances(own, [projected])[0]
+        length = arena.distances(own, [position])[0]
         if not math.isfinite(length):
             return None
         key = base.kind, base.zone_id, base.target_id, SUBGOAL_ID
         features = (*base.features[:4], min(1., length / TRAVEL_SCALE),
                     float(current_key is not None and current_key != key))
-        return replace(base, goal_id=SUBGOAL_ID, goal=projected, features=features,
+        return replace(base, goal_id=SUBGOAL_ID, goal=position, features=features,
                        utility=utility(features, self.config.weights),
-                       reason=f"RL_SUBGOAL:{base.reason}")
+                       reason=f"RL_SUBGOAL:{base.reason}"), base

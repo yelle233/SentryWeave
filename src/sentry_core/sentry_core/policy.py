@@ -53,6 +53,8 @@ class DecisionEngine:
         self._epoch: int | None = None
         self._challenger = None
         self._confirmations = 0
+        # When the current candidate key was first held; a GOAL_MOVED re-issue keeps it.
+        self._held_since: float | None = None
         self._cooldowns: dict[str, float] = {}
         self._recovering = False
 
@@ -140,7 +142,8 @@ class DecisionEngine:
         # Resource recovery is a hard team-configured survival constraint, not a model weight.
         if self._recovering:
             results = [c for c in results if c.kind in (TaskType.HOLD, TaskType.RECOVER)]
-        return results, rejected
+        # A preferred point with several tasks is filtered once per task; log it once.
+        return results, list(dict.fromkeys(rejected))
 
     def _score(self, goal: Goal, path_length, clearance, context, rejected):
         config, info = self.config, context["info"]
@@ -207,12 +210,17 @@ class DecisionEngine:
         kept = []
         for candidate in candidates:
             if candidate.goal_id == SUBGOAL_ID:
+                reason = None
                 if self._cooldowns.get(SUBGOAL_ID, 0) > world.stamp:
-                    rejected.append(f"{SUBGOAL_ID}:FAILURE_COOLDOWN")
-                    continue
-                if any(t.position.distance(candidate.goal) < self.config.ally_clearance
-                       for t in allies):
-                    rejected.append(f"{SUBGOAL_ID}:ALLY_OCCUPIED")
+                    reason = "FAILURE_COOLDOWN"
+                elif any(t.position.distance(candidate.goal) < self.config.ally_clearance
+                         for t in allies):
+                    reason = "ALLY_OCCUPIED"
+                if reason is not None:
+                    rejected.append(f"{SUBGOAL_ID}:{reason}")
+                    # policy_info lists a sub-goal only while it is a candidate.
+                    for key in ("subgoal", "subgoal_base"):
+                        self.goal_prior.info.pop(key, None)
                     continue
             kept.append(candidate)
         return kept
@@ -232,7 +240,7 @@ class DecisionEngine:
                 reason = "URGENT_PREEMPT"
             elif not self.hysteresis:
                 reason = "HYSTERESIS_DISABLED"
-            elif now - self.current.created_at < self.config.min_hold:
+            elif now - self._held_since < self.config.min_hold:
                 chosen, reason = current, "MIN_HOLD"
             elif best.utility < current.utility + self.config.switch_margin:
                 chosen, reason = current, "SWITCH_MARGIN"
@@ -266,8 +274,10 @@ class DecisionEngine:
         threats = self._threats(world)
         candidates, rejected = self._candidates(world, intents, threats)
         if self.goal_prior:
+            current = self.current
             candidates = self.goal_prior.rank(world, candidates, self.arena,
-                                              self.current.key if self.current else None)
+                                              current.key if current else None,
+                                              current_goal=current.goal if current else None)
             candidates = self._screen_subgoal(world, candidates, rejected)
         chosen, arbitration = self._select(candidates, world.stamp)
         moved = (self.current is not None and self.current.key == chosen.key
@@ -275,7 +285,11 @@ class DecisionEngine:
                  and chosen.goal.distance(self.current.goal) > self.config.goal_update_distance)
         if moved:
             arbitration = "GOAL_MOVED"
-        if self.current is None or self.current.key != chosen.key or moved:
+        fresh = self.current is None or self.current.key != chosen.key
+        if fresh:
+            # A moved goal gets a new task identity but keeps this hold start.
+            self._held_since = world.stamp
+        if fresh or moved:
             self._next_id += 1
             self.current = Task(
                 self.session_id, self._next_id, world.seq, world.stamp,

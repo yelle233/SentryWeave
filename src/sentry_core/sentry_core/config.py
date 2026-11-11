@@ -151,6 +151,9 @@ def validate_config(config: Config) -> Config:
         value = getattr(config, name)
         if not math.isfinite(value) or not 0 <= value <= 1:
             raise ValueError(f"invalid {name}")
+    # A count from YAML may arrive as 4.0 or true; range() would then fail every decision.
+    if isinstance(config.contest_samples, bool) or not isinstance(config.contest_samples, int):
+        raise ValueError(f"contest_samples must be an integer, got {config.contest_samples!r}")
     if config.critical_hp >= config.recovered_hp:
         raise ValueError("critical_hp must be below recovered_hp")
     if (config.confirm_cycles < 1 or config.max_tracks < 1

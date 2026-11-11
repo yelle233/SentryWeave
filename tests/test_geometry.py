@@ -127,6 +127,20 @@ def test_batch_distances_and_start_rooted_paths_match_routes(config):
     assert arena.advance_from(start, goals[0], 1.0).distance(start) == pytest.approx(1.0)
 
 
+def test_corner_visibility_is_memoized_per_point_and_read_only(config):
+    import numpy as np
+    from sentry_core.geometry import TacticalMap
+    from sentry_core.model import Vec2
+
+    arena = TacticalMap(config)
+    seen = arena._visible(Vec2(7, 6))
+    # Routes, batch distances and RL waypoints of one cycle query the same points.
+    assert arena._visible(Vec2(7, 6)) is seen
+    assert not seen.flags.writeable
+    origin = np.repeat([[7., 6.]], len(arena.corners), axis=0)
+    assert np.array_equal(seen, ~arena._blocked(origin, arena._nodes))
+
+
 def test_concave_area_is_rejected(config):
     from dataclasses import replace
     from sentry_core.config import Area, validate_config
