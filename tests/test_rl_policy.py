@@ -23,9 +23,10 @@ def actor_file(tmp_path, action=(0.4, 0.), width=20., height=12.):
     return path
 
 
-def test_rl_rescores_rule_candidates_and_adds_one_projected_legal_subgoal(config, world_factory,
-                                                                          tmp_path):
+def test_rl_rescores_rule_candidates_and_projects_one_legal_subgoal(config, world_factory,
+                                                                    tmp_path):
     from sentry_core.geometry import TacticalMap
+    from sentry_core.model import Vec2
     from sentry_core.policy import DecisionEngine
     from sentry_core.rl_policy import GoalPrior
 
@@ -33,15 +34,16 @@ def test_rl_rescores_rule_candidates_and_adds_one_projected_legal_subgoal(config
     baseline = DecisionEngine(config).step(world)
     prior = GoalPrior.load(actor_file(tmp_path), config, blend=1.)
     learned = DecisionEngine(config, goal_prior=prior).step(world)
-    rule = {c.key: c.goal for c in learned.candidates if c.goal_id != "rl_subgoal"}
-    assert {c.key: c.goal for c in baseline.candidates} == rule
+    # Rule candidates are re-scored, never added or moved; the sub-goal is no candidate.
+    assert {c.key: c.goal for c in baseline.candidates} == {
+        c.key: c.goal for c in learned.candidates}
     assert any(a.utility != b.utility for a, b in zip(baseline.candidates, learned.candidates))
-    subgoals = [c for c in learned.candidates if c.goal_id == "rl_subgoal"]
+    subgoal = Vec2(*learned.policy_info["projected_goal"])
     arena = TacticalMap(config)
-    assert len(subgoals) == 1
-    assert arena.reachable(world.self_track.position, subgoals[0].goal)
+    assert arena.legal(subgoal) and arena.reachable(world.self_track.position, subgoal)
     assert learned.policy_info["used"]
-    assert learned.task.goal in [*rule.values(), subgoals[0].goal]
+    chosen = next(c for c in learned.candidates if c.key == learned.task.key)
+    assert learned.task.goal in (chosen.goal, subgoal)
 
 
 def test_rl_cannot_override_resource_or_localization_guards(config, world_factory, tmp_path):
@@ -155,33 +157,37 @@ def test_zero_blend_logs_shadow_proposal_without_changing_decision(config, world
     assert not shadow.policy_info["used"]
 
 
-def test_zero_blend_never_offers_a_subgoal_even_when_it_is_the_closest_goal(config, world_factory,
-                                                                            tmp_path):
+def test_zero_blend_never_refines_a_task_even_when_the_subgoal_would(config, world_factory,
+                                                                     tmp_path):
     from sentry_core.geometry import TacticalMap
     from sentry_core.model import Vec2
     from sentry_core.policy import DecisionEngine
     from sentry_core.rl_policy import GoalPrior
 
-    path, ally = actor_file(tmp_path, (0.04, 0.)), ((1, 14, 4, 1.4, 0.4),)
-    worlds = [world_factory(now=now, allies=ally, self_position=(x, 6.0))
+    path = actor_file(tmp_path, (0.04, 0.))
+    worlds = [world_factory(now=now, self_position=(x, 6.0))
               for now, x in ((10.0, 3.0), (10.5, 3.4), (11.0, 3.8))]
-    # The 0.8 m hint is legal (its own projection), closer than every rule goal, and
-    # offered as a sub-goal at the default blend.
+    # The 0.8 m hint is legal (its own projection), closer than every rule goal, and at
+    # the default blend it becomes the goal of the defense task the rules choose.
     active = DecisionEngine(config, goal_prior=GoalPrior.load(path, config)).step(worlds[0])
+    first = DecisionEngine(config).step(worlds[0])
+    assert active.task.key == first.task.key and active.policy_info["subgoal_refined"]
+    assert active.task.goal == Vec2(*active.policy_info["projected_goal"]) != first.task.goal
     own, proposal = worlds[0].self_track.position, Vec2(*active.policy_info["proposal"])
     assert TacticalMap(config).legal(proposal)
-    assert any(c.goal_id == "rl_subgoal" for c in active.candidates)
     assert all(own.distance(proposal) < own.distance(c.goal) for c in active.candidates
-               if c.goal is not None and c.goal_id != "rl_subgoal")
+               if c.goal is not None)
     shadow = DecisionEngine(config, session_id="test",
                             goal_prior=GoalPrior.load(path, config, blend=0.))
     rule = DecisionEngine(config, session_id="test")
     for world in worlds:
         decision, expected = shadow.step(world), rule.step(world)
-        assert not any(c.goal_id == "rl_subgoal" for c in decision.candidates)
         assert (decision.task.key, decision.task.goal) == (expected.task.key, expected.task.goal)
+        assert decision.task.identity == expected.task.identity
         assert decision.arbitration == expected.arbitration
         assert "subgoal" not in decision.policy_info
+        assert not decision.policy_info["subgoal_refined"]
+        assert decision.policy_info["subgoal_reason"] == "SHADOW"
         assert decision.policy_info["status"] == "SHADOW" and not decision.policy_info["used"]
 
 
@@ -194,4 +200,4 @@ def test_reach_limit_applies_to_both_proposal_and_candidate_waypoints(config, wo
     late = engine.step(world_factory(now=14.5, allies=((1, 14, 4, 1.4, 0.4),)))
     # The suggestion is 14 m away but only 0.75 m of this macro remains reachable.
     # Both sides of the comparison must use that distance, not just the candidates.
-    assert max(c.learned_utility or 0. for c in late.candidates if c.goal_id != "rl_subgoal") > 0.5
+    assert max(c.learned_utility or 0. for c in late.candidates) > 0.5

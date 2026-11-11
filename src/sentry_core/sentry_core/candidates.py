@@ -15,6 +15,7 @@ from .model import IntentType, TaskType, Vec2, World
 MIN_INTERCEPT_THREAT = 0.18
 TRAVEL_SCALE = 25.0
 DUPLICATE_DISTANCE = 0.25
+# The RL sub-goal never becomes a candidate; this names its cooldown and rejections.
 SUBGOAL_ID = "rl_subgoal"
 
 

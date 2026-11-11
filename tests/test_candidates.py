@@ -130,65 +130,148 @@ def test_rl_subgoal_respects_urgency_and_failure_cooldown(config, world_factory,
     urgent = DecisionEngine(config, goal_prior=GoalPrior.load(actor_file(tmp_path), config,
                                                               blend=1.))
     threat = urgent.step(world_factory(enemies=((11, 5, 6, -1, 0),)))
-    assert not any(c.goal_id == "rl_subgoal" for c in threat.candidates)
-    # A 2 m forward hint lands in open space, so the projected sub-goal is the hint itself.
-    # Default blend: the sub-goal carries its base's learned value, so it wins on its
-    # closer position (rule part); at blend 1 it could only tie that base.
+    intercept = next(c for c in threat.candidates if c.key == threat.task.key)
+    assert threat.task.urgent and threat.task.goal == intercept.goal
+    assert threat.policy_info["subgoal_reason"] == "URGENT_TASK"
+    # A 1.4 m forward hint lands in open space inside the base zone, so the projected
+    # sub-goal is the hint itself and becomes the goal of the defense task the rules chose.
     engine = DecisionEngine(config, session_id="test", goal_prior=GoalPrior.load(
-        actor_file(tmp_path, (0.1, 0.)), config))
-    first = engine.step(world_factory(allies=((1, 14, 4, 1.4, 0.4),)))
-    assert first.task.goal_id == "rl_subgoal"
-    assert first.task.goal.distance(Vec2(5, 6)) < 1e-3
+        actor_file(tmp_path, (0.07, 0.)), config))
+    first = engine.step(world_factory())
+    assert first.task.goal.distance(Vec2(4.4, 6)) < 1e-3
     engine.feedback("test", first.task.task_id, "FAILED", 10.1)
-    later = engine.step(world_factory(now=10.5, allies=((1, 14.7, 4.2, 1.4, 0.4),)))
+    later = engine.step(world_factory(now=10.5))
     assert "rl_subgoal:FAILURE_COOLDOWN" in later.rejected
-    assert later.task.goal_id != "rl_subgoal"
+    # Only the sub-goal cools down: the rule task resumes at its rule goal as a new task.
+    rule = next(c for c in later.candidates if c.key == later.task.key)
+    assert later.task.key == first.task.key and later.task.goal == rule.goal
+    assert later.task.task_id > first.task.task_id
 
 
-def test_non_urgent_intercept_with_better_rule_utility_beats_the_subgoal(config, world_factory,
-                                                                        tmp_path):
-    from sentry_core.model import TaskType
+def test_closer_subgoal_never_changes_which_task_the_rules_chose(config, world_factory,
+                                                                tmp_path):
+    from sentry_core.model import TaskType, Vec2
     from sentry_core.policy import DecisionEngine
     from sentry_core.rl_policy import GoalPrior
     from test_rl_policy import actor_file
 
-    # Default blend; a 1 m hint back towards the base while a raider is a moderate threat.
-    prior = GoalPrior.load(actor_file(tmp_path, (-0.05, 0.)), config)
-    result = DecisionEngine(config, goal_prior=prior).step(
-        world_factory(enemies=((11, 8, 10, -1, -0.6),)))
-    subgoal = next(c for c in result.candidates if c.goal_id == "rl_subgoal")
-    chosen = next(c for c in result.candidates if c.key == result.task.key)
-    assert result.task.kind == TaskType.INTERCEPT and not result.task.urgent
-    assert chosen.rule_utility > subgoal.rule_utility + 0.2
-    # The sub-goal lies on the proposal, so its own route would agree by construction.
-    # Its learned part is the agreement of the rule route whose task it inherits.
-    base = next(c for c in result.candidates if c.goal_id == result.policy_info["subgoal_base"]
-                and c.kind == subgoal.kind)
-    assert subgoal.learned_utility == pytest.approx(base.learned_utility)
-    assert subgoal.learned_utility < 0.5
+    # A raider makes a non-urgent intercept the best (blended) rule task. The 0.8 m hint
+    # lands closer than every rule goal: as a competing candidate with the task of the
+    # pushing teammate it won on its short travel and turned the decision into SUPPORT.
+    world = world_factory(self_position=(1.0, 1.0), allies=((1, 14, 4, 1.4, 0.4),),
+                          enemies=((11, 12, 9, -1, 0),))
+    prior = GoalPrior.load(actor_file(tmp_path, (0.04, 0.)), config)
+    decision = DecisionEngine(config, goal_prior=prior).step(world)
+    best = max(decision.candidates, key=lambda c: (c.utility, c.goal_id))
+    assert decision.task.kind == TaskType.INTERCEPT and not decision.task.urgent
+    assert (decision.task.key, decision.task.goal) == (best.key, best.goal)
+    own, subgoal = world.self_track.position, Vec2(*decision.policy_info["projected_goal"])
+    assert all(own.distance(subgoal) < own.distance(c.goal) for c in decision.candidates
+               if c.goal is not None)
+    assert not decision.policy_info["subgoal_refined"]
+    assert decision.policy_info["subgoal_reason"] == "NOT_REFINABLE:INTERCEPT"
 
 
-def test_reached_subgoal_stays_under_normal_hysteresis(config, world_factory, tmp_path):
-    from sentry_core.model import TaskType
+def test_subgoal_moves_only_the_goal_of_the_chosen_support_or_defend_task(config, world_factory,
+                                                                         tmp_path):
+    from sentry_core.model import TaskType, Vec2
     from sentry_core.policy import DecisionEngine
     from sentry_core.rl_policy import GoalPrior
     from test_rl_policy import actor_file
 
-    # The moderate raid below leads the reached sub-goal by ~0.06, so use a 0.05 margin.
-    config = replace(config, switch_margin=0.05)
+    # A pushing teammate makes support_north (15, 8) the rule task. The sub-goal refines
+    # it inside the outpost zone (2.8 m away) or within goal_update_distance of the rule
+    # goal (0.6 m, outside the zone), but not next to the own base, 11 m away.
+    ally = ((1, 14, 4, 1.4, 0.4),)
+    for position, hint, refined in (((15.0, 4.0), (0., 0.1), True),
+                                    ((13.0, 8.0), (0.07, 0.), True),
+                                    ((3.0, 6.0), (0.04, 0.), False)):
+        prior = GoalPrior.load(actor_file(tmp_path, hint), config)
+        decision = DecisionEngine(config, goal_prior=prior).step(
+            world_factory(self_position=position, allies=ally))
+        best = max(decision.candidates, key=lambda c: (c.utility, c.goal_id))
+        subgoal = Vec2(*decision.policy_info["projected_goal"])
+        assert best.kind == TaskType.SUPPORT and best.goal_id == "support_north"
+        assert decision.task.key == best.key
+        assert decision.task.goal == (subgoal if refined else best.goal)
+        assert decision.policy_info["subgoal_refined"] == refined
+        assert decision.policy_info["subgoal_reason"] == (
+            "REFINED" if refined else "OUTSIDE_TASK_AREA")
+    # A refined defense goal follows the identity rule for moved goals: the next sub-goal,
+    # 0.5 m away, keeps the task and its goal; the one after, 2 m away, re-issues the task.
     engine = DecisionEngine(config, session_id="test", goal_prior=GoalPrior.load(
-        actor_file(tmp_path, (0.1, 0.)), config))
-    ally, raider = ((1, 14, 4, 1.4, 0.4),), ((11, 8, 10, -1, -0.6),)
-    first = engine.step(world_factory(allies=ally))
-    assert first.task.goal_id == "rl_subgoal"
+        actor_file(tmp_path, (0.07, 0.)), config))
+    first = engine.step(world_factory())
+    near = engine.step(world_factory(now=15.0, self_position=(3.5, 6.0)))
+    moved = engine.step(world_factory(now=20.0, self_position=(1.0, 6.0)))
+    assert first.task.kind == TaskType.DEFEND and first.policy_info["subgoal_refined"]
+    assert first.task.goal == Vec2(*first.policy_info["subgoal"])
+    assert first.policy_info["subgoal_base"] == first.task.goal_id
+    assert first.task.goal.distance(Vec2(4.4, 6.0)) < 1e-6
+    assert near.policy_info["subgoal_reason"] == "REFINED"
+    assert 0.4 < first.task.goal.distance(Vec2(*near.policy_info["subgoal"])) < 0.6
+    assert near.task.identity == first.task.identity and near.task.goal == first.task.goal
+    assert moved.arbitration == "GOAL_MOVED" and moved.task.key == first.task.key
+    assert moved.task.task_id == first.task.task_id + 1
+    assert moved.task.goal == Vec2(*moved.policy_info["subgoal"])
+    assert moved.task.goal.distance(first.task.goal) > config.goal_update_distance
+
+
+def test_urgent_hold_and_recover_tasks_keep_their_rule_goals(config, world_factory, tmp_path):
+    from sentry_core.model import TaskType
+    from sentry_core.policy import DecisionEngine
+    from sentry_core.rl_policy import GoalPrior
+    from test_rl_policy import actor_file
+
+    def decide(world, hint=(0.04, 0.)):
+        prior = GoalPrior.load(actor_file(tmp_path, hint), config)
+        return DecisionEngine(config, goal_prior=prior).step(world)
+
+    # At 50 % HP, RECOVER is a non-urgent rule task. The hint lands inside the supply
+    # zone; as a competing SUPPORT candidate it used to win there.
+    recover = decide(world_factory(self_position=(1.0, 1.0), allies=((1, 14, 4, 1.4, 0.4),),
+                                   hp=0.5), (0., 0.1))
+    urgent = decide(world_factory(enemies=((11, 5, 6, -1, 0),)))
+    recovering = decide(world_factory(hp=0.1, supply=True))
+    hold = decide(replace(world_factory(), self_track=None))
+    for decision, kind, reason in ((recover, TaskType.RECOVER, "NOT_REFINABLE:RECOVER"),
+                                   (urgent, TaskType.INTERCEPT, "URGENT_TASK"),
+                                   (recovering, TaskType.RECOVER, "URGENT_TASK"),
+                                   (hold, TaskType.HOLD, "NO_RULE_TASK")):
+        chosen = next(c for c in decision.candidates if c.key == decision.task.key)
+        assert decision.task.kind == kind and decision.task.goal == chosen.goal
+        assert not decision.policy_info["subgoal_refined"]
+        assert decision.policy_info["subgoal_reason"] == reason
+        assert "subgoal" not in decision.policy_info
+    assert not recover.task.urgent and urgent.task.urgent and recovering.task.urgent
+
+
+def test_reached_subgoal_keeps_refining_its_task_under_normal_hysteresis(config, world_factory,
+                                                                        tmp_path):
+    from sentry_core.model import TaskType, Vec2
+    from sentry_core.policy import DecisionEngine
+    from sentry_core.rl_policy import GoalPrior
+    from test_rl_policy import actor_file
+
+    engine = DecisionEngine(config, session_id="test", goal_prior=GoalPrior.load(
+        actor_file(tmp_path, (0., 0.1)), config))
+    raider = ((11, 8, 10, -1, -0.6),)
+    first = engine.step(world_factory(self_position=(1.0, 7.3)))
+    subgoal = Vec2(*first.policy_info["subgoal"])
+    rule = next(c for c in first.candidates if c.key == first.task.key)
+    # The 1.2 m hint refines the defense task inside the base zone, 3 m from its rule goal.
+    assert first.task.kind == TaskType.DEFEND and first.task.goal == subgoal
+    assert subgoal.distance(rule.goal) > config.goal_update_distance
     # The robot now stands on the sub-goal: the proposal is reached until the next
     # inference. From 11 s a moderate (non-urgent) raid makes an intercept better.
-    steps = [engine.step(world_factory(now=10.5, allies=ally, self_position=(5.0, 6.0)))]
-    steps += [engine.step(world_factory(now=now, allies=ally, enemies=raider,
-                                        self_position=(5.0, 6.0)))
+    steps = [engine.step(world_factory(now=10.5, self_position=(1.0, 8.5)))]
+    steps += [engine.step(world_factory(now=now, enemies=raider, self_position=(1.0, 8.5)))
               for now in (11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0)]
     assert all(d.policy_info["status"] == "PROPOSAL_REACHED" for d in steps)
-    assert all(d.task.identity == first.task.identity for d in steps[:-1])
+    # The task keeps its sub-goal (no jump back to the rule goal) until the rules switch.
+    assert all(d.task.identity == first.task.identity and d.task.goal == subgoal
+               and d.policy_info["subgoal_reason"] == "KEPT:PROPOSAL_REACHED"
+               for d in steps[:-1])
     assert [d.arbitration for d in steps] == [
         "KEEP_CURRENT", "MIN_HOLD", "MIN_HOLD", "MIN_HOLD", "MIN_HOLD",
         "CONFIRMING", "CONFIRMING", "CONFIRMED"]

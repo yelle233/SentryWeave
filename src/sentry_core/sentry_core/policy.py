@@ -55,6 +55,8 @@ class DecisionEngine:
         self._confirmations = 0
         # When the current candidate key was first held; a GOAL_MOVED re-issue keeps it.
         self._held_since: float | None = None
+        # Whether the current task's goal is an RL sub-goal refining its rule goal.
+        self._refined = False
         self._cooldowns: dict[str, float] = {}
         self._recovering = False
 
@@ -62,7 +64,12 @@ class DecisionEngine:
         if (self.current is None or self.current.identity != (session_id, task_id)
                 or not math.isfinite(now)):
             return
-        if state in ("FAILED", "REJECTED"):
+        if state in ("FAILED", "REJECTED") and self._refined:
+            # The RL sub-goal failed, not the rule goal it refined: cool the sub-goal down
+            # and resume the task at its rule goal, which needs a new task identity.
+            self._cooldowns[SUBGOAL_ID] = now + self.config.cooldown
+            self.current = None
+        elif state in ("FAILED", "REJECTED"):
             self._cooldowns[self.current.goal_id] = now + self.config.cooldown
         elif state == "CANCELED":
             # A watchdog can cancel between planner ticks. Resuming requires a new
@@ -204,26 +211,46 @@ class DecisionEngine:
         return Candidate(kind, zone.name, target, goal.goal_id, goal.position, goal.yaw, features,
                          utility(features, config.weights), confidence, urgent, reason)
 
-    def _screen_subgoal(self, world, candidates, rejected):
+    def _screen_subgoal(self, world, subgoal, rejected):
         """A model sub-goal still obeys failure cooldowns and teammate clearance."""
-        allies = [t for t in world.allies if t.usable]
-        kept = []
-        for candidate in candidates:
-            if candidate.goal_id == SUBGOAL_ID:
-                reason = None
-                if self._cooldowns.get(SUBGOAL_ID, 0) > world.stamp:
-                    reason = "FAILURE_COOLDOWN"
-                elif any(t.position.distance(candidate.goal) < self.config.ally_clearance
-                         for t in allies):
-                    reason = "ALLY_OCCUPIED"
-                if reason is not None:
-                    rejected.append(f"{SUBGOAL_ID}:{reason}")
-                    # policy_info lists a sub-goal only while it is a candidate.
-                    for key in ("subgoal", "subgoal_base"):
-                        self.goal_prior.info.pop(key, None)
-                    continue
-            kept.append(candidate)
-        return kept
+        if self._cooldowns.get(SUBGOAL_ID, 0) > world.stamp:
+            reason = "FAILURE_COOLDOWN"
+        elif any(t.usable and t.position.distance(subgoal) < self.config.ally_clearance
+                 for t in world.allies):
+            reason = "ALLY_OCCUPIED"
+        else:
+            return None
+        rejected.append(f"{SUBGOAL_ID}:{reason}")
+        return reason
+
+    def _refine(self, world, chosen, rejected):
+        """The RL sub-goal may refine the goal of the task the rules chose, never the task.
+
+        It must lie in the task's zone or within ``goal_update_distance`` of the rule
+        goal, be reachable and pass ``_screen_subgoal``. ``policy_info`` records whether
+        it refined the chosen task this cycle (``subgoal_refined``) and why not otherwise
+        (``subgoal_reason``). As for any goal, the task is only re-issued at a refined goal
+        that moved more than ``goal_update_distance``.
+        """
+        current = self.current
+        kept = (current.goal if current is not None and self._refined
+                and current.key == chosen.key else None)
+        subgoal, reason = self.goal_prior.subgoal_for(chosen, kept)
+        if subgoal is not None:
+            zone = next(z for z in self.config.zones if z.name == chosen.zone_id)
+            if not (zone.contains(subgoal)
+                    or subgoal.distance(chosen.goal) <= self.config.goal_update_distance):
+                subgoal, reason = None, "OUTSIDE_TASK_AREA"
+            elif not math.isfinite(self.arena.distances(world.self_track.position,
+                                                        [subgoal])[0]):
+                subgoal, reason = None, "UNREACHABLE"
+            elif screened := self._screen_subgoal(world, subgoal, rejected):
+                subgoal, reason = None, screened
+        info = self.goal_prior.info
+        info.update(subgoal_refined=subgoal is not None, subgoal_reason=reason)
+        if subgoal is not None:
+            info.update(subgoal=[subgoal.x, subgoal.y], subgoal_base=chosen.goal_id)
+        return subgoal
 
     def _select(self, candidates, now):
         current = next((c for c in candidates if self.current and c.key == self.current.key), None)
@@ -274,12 +301,12 @@ class DecisionEngine:
         threats = self._threats(world)
         candidates, rejected = self._candidates(world, intents, threats)
         if self.goal_prior:
-            current = self.current
-            candidates = self.goal_prior.rank(world, candidates, self.arena,
-                                              current.key if current else None,
-                                              current_goal=current.goal if current else None)
-            candidates = self._screen_subgoal(world, candidates, rejected)
+            candidates = self.goal_prior.rank(world, candidates, self.arena)
         chosen, arbitration = self._select(candidates, world.stamp)
+        subgoal = self._refine(world, chosen, rejected) if self.goal_prior else None
+        if subgoal is not None:
+            # Only the goal moves: kind, zone, target and goal id stay the rules' choice.
+            chosen = replace(chosen, goal=subgoal)
         moved = (self.current is not None and self.current.key == chosen.key
                  and chosen.goal is not None and self.current.goal is not None
                  and chosen.goal.distance(self.current.goal) > self.config.goal_update_distance)
@@ -297,6 +324,7 @@ class DecisionEngine:
                 chosen.target_id, chosen.goal_id, chosen.goal, chosen.yaw,
                 chosen.utility, chosen.confidence, chosen.urgent, chosen.reason,
             )
+            self._refined = subgoal is not None
         else:
             self.current = replace(self.current, world_seq=world.seq,
                                    valid_until=world.stamp + self.config.task_lease,
