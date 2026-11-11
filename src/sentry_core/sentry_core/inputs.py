@@ -69,3 +69,59 @@ def view_inputs(world: World, config) -> InputView:
     return InputView(phase or Phase.UNKNOWN, remaining, game.own_team if game else None, supply,
                      self_hp, self_ammo, own.known_alive if own else None, robots, structures,
                      sources)
+
+
+# Categories the offline navigation model cannot mark as invalid (it was trained on
+# logs with every robot localized). Low availability here lowers the RL blend.
+RL_CATEGORIES = ("allies", "enemies")
+
+
+@dataclass(frozen=True)
+class InfoReport:
+    completeness: dict[str, float]
+    missing: tuple[str, ...]
+
+
+def assess(world: World, config, view: InputView) -> InfoReport:
+    """Per-category availability in [0, 1] and the missing items behind it."""
+    missing = []
+    if view.phase == Phase.UNKNOWN:
+        missing.append("game.phase")
+    if view.remaining is None:
+        missing.append("game.remaining_time")
+    if view.self_hp is None:
+        missing.append("self.hp")
+    if view.self_ammo is None:
+        missing.append("self.ammo")
+    completeness = {
+        "game": 0.5 * (view.phase != Phase.UNKNOWN) + 0.5 * (view.remaining is not None),
+        "self": 0.5 * (view.self_hp is not None) + 0.5 * (view.self_ammo is not None),
+    }
+    subjects = set()
+    for team, name, tracks, expected in ((Team.ALLY, "allies", world.allies, config.expected_allies),
+                                         (Team.ENEMY, "enemies", world.enemies,
+                                          config.expected_enemies)):
+        dead = {s.robot_id for s in view.robots.values() if s.team == team and s.known_alive is False}
+        known = ({t.robot_id for t in tracks}
+                 | {s.robot_id for s in view.robots.values() if s.team == team}) - dead
+        if team == Team.ALLY:
+            known.discard(config.self_id)
+            dead.discard(config.self_id)
+        usable = {t.robot_id for t in tracks if t.usable} - dead
+        # Robots known to be down are not expected on the field until they respawn.
+        total = max(expected - len(dead), len(known))
+        completeness[name] = min(1.0, len(usable) / total) if total else 1.0
+        if len(usable) < total:
+            missing.append(f"{name}.positions {len(usable)}/{total}")
+        missing += [f"{name}.{robot_id}.stale" for robot_id in sorted(known - usable)]
+        subjects |= {(team, robot_id) for robot_id in known | dead}
+    total = max(config.expected_allies + config.expected_enemies, len(subjects))
+    rated = sum(1 for team, robot_id in subjects
+                if (status := view.robot(team, robot_id)) and status.hp_ratio is not None)
+    completeness["robot_status"] = min(1.0, rated / total) if total else 1.0
+    if rated < total:
+        missing.append(f"robots.hp {rated}/{total}")
+    known_structures = [name for name, alive in view.structures.items() if alive is not None]
+    completeness["structures"] = len(known_structures) / len(view.structures)
+    missing += [f"structure.{name}" for name, alive in view.structures.items() if alive is None]
+    return InfoReport(completeness, tuple(missing))

@@ -9,9 +9,11 @@ from .candidates import (
 )
 from .config import Config, validate_config
 from .geometry import TacticalMap
-from .inputs import view_inputs
+from .inputs import RL_CATEGORIES, assess, view_inputs
 from .intent import IntentEstimator
-from .model import Candidate, Decision, IntentType, Phase, Task, TaskType, Threat, World
+from .model import (
+    Candidate, Decision, IntentType, Phase, Task, TaskType, Team, Threat, TrackStatus, World,
+)
 
 
 FEATURES = ("strategic", "cooperation", "urgency", "risk", "travel", "switching")
@@ -37,6 +39,11 @@ def safety_reason(world: World, config: Config, arena: TacticalMap) -> str | Non
     return None
 
 
+def _down(info, robot_id: int) -> bool:
+    status = info.robot(Team.ALLY, robot_id)
+    return status is not None and status.known_alive is False
+
+
 class DecisionEngine:
     def __init__(self, config: Config, model=None, session_id: str | None = None,
                  baseline: bool = False, hysteresis: bool = True, goal_prior=None):
@@ -59,6 +66,7 @@ class DecisionEngine:
         self._refined = False
         self._cooldowns: dict[str, float] = {}
         self._recovering = False
+        self._degraded: list[str] = []
 
     def feedback(self, session_id: str, task_id: int, state: str, now: float) -> None:
         if (self.current is None or self.current.identity != (session_id, task_id)
@@ -79,35 +87,60 @@ class DecisionEngine:
     def _unsafe(self, world: World) -> str | None:
         return safety_reason(world, self.config, self.arena)
 
-    def _threats(self, world: World) -> tuple[Threat, ...]:
+    def _threats(self, world: World, view=None) -> tuple[Threat, ...]:
+        config = self.config
+        view = view or view_inputs(world, config)
+        fade = max(1e-6, config.retention - config.predicted_age)
         result = []
-        for zone in self.config.zones:
+        for zone in config.zones:
             if zone.intent != IntentType.DEFEND_BASE:
                 continue
-            best = Threat(zone.name, 0.0, None, None)
+            best, best_priority = Threat(zone.name, 0.0, None, None), 0.0
             for enemy in world.enemies:
-                if not enemy.usable:
+                status = view.robot(Team.ENEMY, enemy.robot_id)
+                if status is not None and status.known_alive is False:
+                    continue
+                if enemy.usable:
+                    weight, speed = enemy.confidence, max(0.7, enemy.velocity.norm)
+                elif enemy.status == TrackStatus.STALE and enemy.position.finite:
+                    # Missing radar data: keep the last known position, fading until dropped.
+                    weight = config.stale_enemy_weight * max(
+                        0., 1 - (enemy.age - config.predicted_age) / fade)
+                    speed = 0.7
+                else:
                     continue
                 route = self.arena.zone_route(enemy.position, zone)
                 distance = self.arena.zone_distance(enemy.position, zone)
-                if not route:
+                if not route or weight <= 0:
                     continue
-                speed = max(0.7, enemy.velocity.norm)
                 eta = max(0., distance - zone.radius) / speed
-                dx, dy = route[1].x - enemy.position.x, route[1].y - enemy.position.y
-                denom = math.hypot(dx, dy) * enemy.velocity.norm
-                approach = max(0., (dx * enemy.velocity.x + dy * enemy.velocity.y) / denom
-                               ) if denom > 1e-6 else 0.5
+                approach = 0.5
+                if enemy.usable:
+                    dx, dy = route[1].x - enemy.position.x, route[1].y - enemy.position.y
+                    denom = math.hypot(dx, dy) * enemy.velocity.norm
+                    if denom > 1e-6:
+                        approach = max(0., (dx * enemy.velocity.x + dy * enemy.velocity.y) / denom)
                 inside = (distance <= zone.radius
                           or bool(zone.polygon) and zone.contains(enemy.position))
                 factor = 1.0 if inside else 0.55 + 0.45 * approach
-                score = min(1., enemy.confidence * zone.importance * math.exp(-eta / 8) * factor)
-                if score > best.score:
-                    best = Threat(zone.name, score, enemy.robot_id, eta)
+                score = min(1., weight * zone.importance * math.exp(-eta / 8) * factor)
+                ratio = status.hp_ratio if status is not None else None
+                # Health re-orders targets only when known; unknown is neither low nor full.
+                priority = score + (config.enemy_low_hp_bonus * (1 - ratio)
+                                    if ratio is not None else 0.)
+                if priority > best_priority:
+                    best, best_priority = Threat(zone.name, score, enemy.robot_id, eta), priority
+            if best.enemy_id is not None:
+                enemy = next(t for t in world.enemies if t.robot_id == best.enemy_id)
+                if not enemy.usable:
+                    self._degraded.append(f"STALE_ENEMY:{best.enemy_id}")
+                status = view.robot(Team.ENEMY, best.enemy_id)
+                if status is None or status.hp_ratio is None:
+                    self._degraded.append(f"ENEMY_HP_UNKNOWN:{best.enemy_id}")
             result.append(best)
         return tuple(result)
 
-    def _candidates(self, world, intents, threats):
+    def _candidates(self, world, intents, threats, report=None):
         config = self.config
         unsafe = self._unsafe(world)
         hold = Candidate(TaskType.HOLD, "", None, "", None, 0., (0.,) * 6,
@@ -115,6 +148,7 @@ class DecisionEngine:
         if unsafe:
             return [hold], [unsafe]
         info, own = view_inputs(world, config), world.self_track
+        report = report or assess(world, config, info)
         own_hp, own_ammo = info.self_hp, info.self_ammo
         can_supply = config.supply_enabled and info.supply_available is True
         need_supply = ((own_hp is not None and own_hp < config.critical_hp)
@@ -128,7 +162,8 @@ class DecisionEngine:
         lengths = self.arena.distances(own.position, [g.position for g in goals])
         own_region = self.arena.component(own.position)
         context = {"info": info, "intents": intents, "allies": allies, "can_supply": can_supply,
-                   "threats": {t.zone_id: t for t in threats}}
+                   "threats": {t.zone_id: t for t in threats},
+                   "completeness": report.completeness}
         for goal, path_length in zip(goals, lengths):
             if self._cooldowns.get(goal.goal_id, 0) > world.stamp:
                 rejected.append(f"{goal.goal_id}:FAILURE_COOLDOWN")
@@ -163,10 +198,16 @@ class DecisionEngine:
         target, confidence, urgent, reason = None, 1.0, False, ""
         value, cooperation, urgency, risk = 0., 0., 0., (1 - hp) * 0.3
         kind = goal.kind
+        completeness = context["completeness"]
         if kind == TaskType.DEFEND:
             value = 0.42 + (0.12 if info.structures["own_outpost"] is False else 0.)
             cooperation = 0.18 / (1 + coverage)
             urgency, reason = 0.15 + 0.8 * threat.score, "AREA_UNCOVERED"
+            boost = config.missing_enemy_defense_boost * (1 - completeness["enemies"])
+            if zone.intent == IntentType.DEFEND_BASE and boost > 0:
+                # Unknown enemy positions raise the priority of the key defense areas.
+                urgency = min(1., urgency + boost)
+                self._degraded.append(f"ENEMY_POSITIONS_MISSING:defense+{boost:.2f}")
         elif kind == TaskType.INTERCEPT:
             if self.baseline or threat.score < MIN_INTERCEPT_THREAT or hp < config.critical_hp:
                 return None
@@ -179,12 +220,22 @@ class DecisionEngine:
             if own_hp is None or hp < 0.35 or own_ammo is None or own_ammo < 0.1:
                 rejected.append(f"{goal.goal_id}:RESOURCES_UNCERTAIN_OR_LOW")
                 return None
-            if (zone.intent == IntentType.ATTACK_OUTPOST
-                    and info.structures.get(zone.structure or "enemy_outpost") is not True):
-                rejected.append(f"{goal.goal_id}:OUTPOST_NOT_CONFIRMED_ALIVE")
+            attack = 1.0
+            if zone.intent == IntentType.ATTACK_OUTPOST:
+                structure = zone.structure or "enemy_outpost"
+                alive = info.structures.get(structure)
+                if alive is False:
+                    rejected.append(f"{goal.goal_id}:TARGET_DESTROYED")
+                    return None
+                if alive is None:
+                    # Alive but unconfirmed: still a valid target, with less attack weight.
+                    attack = config.unconfirmed_attack_factor
+                    self._degraded.append(f"STRUCTURE_UNCONFIRMED:{structure}")
+            if goal.target_id is not None and _down(info, goal.target_id):
+                rejected.append(f"{goal.goal_id}:ALLY_DOWN")
                 return None
             supporting = [i for i in context["intents"] if i.valid and i.zone_id == zone.name
-                          and i.robot_id in allies
+                          and i.robot_id in allies and not _down(info, i.robot_id)
                           and (goal.target_id is None or i.robot_id == goal.target_id)]
             if self.baseline and zone.intent == IntentType.ATTACK_OUTPOST:
                 confidence, cooperation = 1., 0.7
@@ -194,7 +245,11 @@ class DecisionEngine:
                 cooperation = confidence * min(1., clearance / 3.)
             else:
                 return None
-            value, urgency, risk = zone.importance, 0.5, risk + 0.1
+            scale = 0.5 + 0.5 * completeness["allies"]
+            if scale < 1:
+                self._degraded.append(f"ALLIES_INCOMPLETE:support*{scale:.2f}")
+            value, urgency, risk = zone.importance * attack, 0.5, risk + 0.1
+            cooperation *= scale
             reason = "TEAM_SUPPORT_HIGH" if not self.baseline else "FIXED_OUTPOST_RULE"
         elif kind == TaskType.RECOVER:
             if not context["can_supply"] or not (
@@ -297,11 +352,29 @@ class DecisionEngine:
                 self.goal_prior.reset()
         self._last_time, self._epoch = world.stamp, world.epoch
         self._cooldowns = {k: v for k, v in self._cooldowns.items() if v > world.stamp}
+        self._degraded = []
+        view = view_inputs(world, self.config)
+        report = assess(world, self.config, view)
         intents = self.estimator.estimate(world)
-        threats = self._threats(world)
-        candidates, rejected = self._candidates(world, intents, threats)
+        threats = self._threats(world, view)
+        candidates, rejected = self._candidates(world, intents, threats, report)
+        missing_info = {"completeness": {k: round(v, 3) for k, v in report.completeness.items()},
+                        "missing": list(report.missing)}
         if self.goal_prior:
-            candidates = self.goal_prior.rank(world, candidates, self.arena)
+            low = [c for c in RL_CATEGORIES
+                   if report.completeness[c] < self.config.completeness_threshold]
+            scale = (min(report.completeness[c] for c in RL_CATEGORIES)
+                     / self.config.completeness_threshold if low else 1.0)
+            reason = "INFO_INCOMPLETE:" + ",".join(low) if low else ""
+            # A reduced blend re-weights the rule ranking; at 0 the model is only recorded
+            # (SHADOW), so it cannot refine the chosen task's goal either.
+            candidates = self.goal_prior.rank(world, candidates, self.arena, scale, reason)
+            missing_info["rl_blend"] = {"configured": self.goal_prior.blend,
+                                        "effective": self.goal_prior.blend * scale,
+                                        "reason": reason}
+            if low:
+                self._degraded.append(f"RL_BLEND_REDUCED:{reason}")
+        missing_info["degraded"] = list(dict.fromkeys(self._degraded))
         chosen, arbitration = self._select(candidates, world.stamp)
         subgoal = self._refine(world, chosen, rejected) if self.goal_prior else None
         if subgoal is not None:
@@ -332,4 +405,4 @@ class DecisionEngine:
                                    urgent=chosen.urgent, reason=chosen.reason)
         return Decision(self.current, intents, threats, tuple(candidates), tuple(rejected),
                         arbitration, world.mode,
-                        dict(self.goal_prior.info) if self.goal_prior else {})
+                        dict(self.goal_prior.info) if self.goal_prior else {}, missing_info)

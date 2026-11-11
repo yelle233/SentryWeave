@@ -154,8 +154,10 @@ class GoalPrior:
     never changes which task wins, nor its kind, zone, target or urgency. A refined
     task keeps its sub-goal while the proposal cannot steer (for example once it is
     reached) instead of jumping back to its rule goal; normal hysteresis decides when
-    to leave the task. With blend 0 the proposal is only recorded. The model never moves
-    rule candidates or bypasses rule filters. DT context records observed past
+    to leave the task. With blend 0 the proposal is only recorded. The decision engine
+    lowers the blend for a cycle, down to 0, while teammate or enemy positions are
+    incomplete (``Config.completeness_threshold``). The model never moves rule
+    candidates or bypasses rule filters. DT context records observed past
     displacement, not unexecuted plans.
     """
 
@@ -238,18 +240,24 @@ class GoalPrior:
                         else "OUT_OF_FIELD")
         self.last_update, self.generation = world.stamp, own.generation
 
-    def rank(self, world, candidates, arena):
+    def rank(self, world, candidates, arena, blend_scale=1.0, blend_reason=""):
         """Blend rule utilities with the proposal and project it onto one legal sub-goal.
 
         The sub-goal (``subgoal``) is not added to the candidates; see ``subgoal_for``.
+        ``blend_scale`` < 1 lowers the configured blend when inputs are incomplete
+        (``blend_reason``). An effective blend of 0 only records the proposal (SHADOW),
+        as a configured blend of 0 does, so no sub-goal is offered that cycle either.
         """
         self.subgoal = None
+        blend = self.blend * min(1., max(0., blend_scale))
         self.info = {
             "algorithm": self.model.payload["algorithm"], "model_id": self.model_id,
             "dataset_id": self.model.payload.get("provenance", {}).get("dataset_id"),
             "domain_transfer": self.domain_transfer, "mirror": self.mirror,
-            "blend": self.blend, "used": False,
+            "blend": self.blend, "effective_blend": blend, "used": False,
         }
+        if blend_reason:
+            self.info["blend_reason"] = blend_reason
         if not any(c.kind != TaskType.HOLD and c.goal is not None for c in candidates):
             self.info["status"] = "NO_FEASIBLE_TASK"
             return candidates
@@ -262,7 +270,7 @@ class GoalPrior:
         age = world.stamp - self.last_update
         self.info.update(status=self._status, cache_age=age,
                          proposal=[self.proposal.x, self.proposal.y])
-        if self.blend == 0:
+        if blend == 0:
             self.info.update(status="SHADOW", proposal_status=self._status)
             return candidates
         own = world.self_track.position
@@ -295,7 +303,7 @@ class GoalPrior:
         def blended(candidate):
             waypoint = arena.advance_from(own, candidate.goal, travel)
             score = math.exp(-0.5 * (waypoint.distance(projected) / radius) ** 2)
-            return replace(candidate, utility=(1 - self.blend) * candidate.utility + self.blend * score,
+            return replace(candidate, utility=(1 - blend) * candidate.utility + blend * score,
                            rule_utility=candidate.utility, learned_utility=score)
 
         ranked = [c if c.kind == TaskType.HOLD or c.goal is None else blended(c) for c in candidates]

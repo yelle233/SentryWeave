@@ -111,6 +111,13 @@ class Config:
     support_standoff: float = 3.0
     contest_samples: int = 4
     goal_update_distance: float = 1.5
+    expected_allies: int = 0
+    expected_enemies: int = 0
+    completeness_threshold: float = 0.6
+    missing_enemy_defense_boost: float = 0.25
+    unconfirmed_attack_factor: float = 0.7
+    enemy_low_hp_bonus: float = 0.15
+    stale_enemy_weight: float = 0.5
 
     def structure(self, name: str) -> Structure | None:
         return next((s for s in self.structures if s.name == name), None)
@@ -147,17 +154,23 @@ def validate_config(config: Config) -> Config:
     if config.min_hold < 0 or not math.isfinite(config.min_hold):
         raise ValueError("min_hold must be finite and nonnegative")
     for name in ("switch_margin", "intent_threshold", "critical_hp",
-                 "recovered_hp", "urgent_threat", "jump_slack"):
+                 "recovered_hp", "urgent_threat", "jump_slack", "completeness_threshold",
+                 "missing_enemy_defense_boost", "unconfirmed_attack_factor",
+                 "enemy_low_hp_bonus", "stale_enemy_weight"):
         value = getattr(config, name)
         if not math.isfinite(value) or not 0 <= value <= 1:
             raise ValueError(f"invalid {name}")
-    # A count from YAML may arrive as 4.0 or true; range() would then fail every decision.
-    if isinstance(config.contest_samples, bool) or not isinstance(config.contest_samples, int):
-        raise ValueError(f"contest_samples must be an integer, got {config.contest_samples!r}")
+    # A count from YAML may arrive as 4.0 or true; range() would then fail every decision,
+    # and a fractional robot count would distort every completeness ratio.
+    for name in ("contest_samples", "expected_allies", "expected_enemies"):
+        value = getattr(config, name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an integer, got {value!r}")
     if config.critical_hp >= config.recovered_hp:
         raise ValueError("critical_hp must be below recovered_hp")
     if (config.confirm_cycles < 1 or config.max_tracks < 1
-            or not 0 <= config.contest_samples <= 16):
+            or not 0 <= config.contest_samples <= 16
+            or not 0 <= config.expected_allies <= 32 or not 0 <= config.expected_enemies <= 32):
         raise ValueError("invalid positive count")
     if (not math.isfinite(config.defense_spread) or not 0 <= config.defense_spread <= math.pi
             or not math.isfinite(config.support_side) or config.support_side < 0):

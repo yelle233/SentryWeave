@@ -276,3 +276,4 @@ class Decision:
     arbitration: str
     mode: str
     policy_info: dict = field(default_factory=dict)
+    missing_info: dict = field(default_factory=dict)
