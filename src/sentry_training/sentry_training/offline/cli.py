@@ -105,7 +105,8 @@ def main(argv=None):
         if args.utility_model:
             config = load_utility(args.utility_model, config)
         intent = IntentModel.load(args.intent_model, config) if args.intent_model else None
-        prior = GoalPrior.load(args.actor, config, args.blend, args.mirror, args.allow_domain_transfer)
+        prior = GoalPrior.load(args.actor, config, args.blend, args.mirror or None,
+                               args.allow_domain_transfer)
         result = replay(config, args.trace, model=intent, policy="rl", goal_prior=prior)
     else:
         result = _closed_loop(args)

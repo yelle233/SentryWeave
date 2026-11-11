@@ -124,13 +124,14 @@ def test_own_team_parameter_keeps_self_id_derivation(tmp_path):
 
     tactics = ROOT / "src/sentry_bringup/config/tactics.yaml"
     raw = yaml.safe_load(tactics.read_text(encoding="utf-8"))
-    del raw["self_id"]
-    derived = tmp_path / "tactics.yaml"
-    derived.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    # The demo tactics omit self_id; an explicit copy keeps its relative field file reachable.
+    raw.update(self_id=7, field=str(tactics.parent / raw["field"]))
+    explicit = tmp_path / "tactics.yaml"
+    explicit.write_text(yaml.safe_dump(raw), encoding="utf-8")
     rclpy.init()
     try:
-        for path, team, expected in ((derived, "", ("RED", 7)), (derived, "blue", ("BLUE", 107)),
-                                     (tactics, "BLUE", ("BLUE", 7))):
+        for path, team, expected in ((tactics, "", ("RED", 7)), (tactics, "blue", ("BLUE", 107)),
+                                     (explicit, "BLUE", ("BLUE", 7))):
             node = Node("own_team_test", parameter_overrides=[
                 Parameter("config_file", value=str(path)), Parameter("own_team", value=team),
             ])

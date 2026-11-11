@@ -1,4 +1,8 @@
-"""Validated, immutable season settings. Coordinates in the sample are synthetic."""
+"""Validated, immutable tactics settings and the field semantics they reference.
+
+Schema 1 keeps the original flat file. Schema 2 references a field file
+(``field_version: 1``) with structures, zones, obstacles and rule keep-outs.
+"""
 
 from dataclasses import asdict, dataclass
 import hashlib
@@ -9,7 +13,7 @@ from pathlib import Path
 import yaml
 
 from .model import TEAM_COLORS, IntentType, TaskType, Vec2
-from .shapes import area_polygon, inflate, is_convex
+from .shapes import area_polygon, contains, inflate, is_convex
 
 
 @dataclass(frozen=True)
@@ -21,12 +25,28 @@ class Area:
 
 
 @dataclass(frozen=True)
+class Structure:
+    """Base, outpost or field-defined structure position (may lie inside an obstacle)."""
+
+    name: str
+    position: Vec2
+    yaw: float = 0.0
+
+
+@dataclass(frozen=True)
 class Zone:
     name: str
     center: Vec2
     radius: float
     intent: IntentType
     importance: float
+    polygon: tuple[Vec2, ...] = ()
+    structure: str = ""
+
+    def contains(self, p: Vec2) -> bool:
+        if self.polygon:
+            return contains(self.polygon, p)
+        return self.center.distance(p) <= self.radius
 
 
 @dataclass(frozen=True)
@@ -78,11 +98,20 @@ class Config:
     # Rule-prohibited areas for this robot (convex Area polygons).
     keepouts: tuple[Area, ...] = ()
     grid_resolution: float = 0.1
+    structures: tuple[Structure, ...] = ()
+    season: str = ""
+    mirror: str = "none"
+    mirrored: bool = False
+    mirror_tolerance: float = 0.05
+
+    def structure(self, name: str) -> Structure | None:
+        return next((s for s in self.structures if s.name == name), None)
 
     @property
     def map_fingerprint(self) -> str:
         values = {key: asdict(self)[key] for key in
-                  ("frame", "bounds", "obstacles", "keepouts", "robot_radius", "zones", "points")}
+                  ("frame", "bounds", "obstacles", "keepouts", "structures", "robot_radius",
+                   "zones", "points")}
         return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
@@ -126,12 +155,20 @@ def validate_config(config: Config) -> Config:
         raise ValueError("map needs attack, defense, contest and recovery zones")
     if not math.isfinite(config.grid_resolution) or not 0.02 <= config.grid_resolution <= 1.0:
         raise ValueError("grid_resolution must be in [0.02, 1.0] m")
+    if config.mirror not in ("auto", "none") or not (
+            math.isfinite(config.mirror_tolerance) and config.mirror_tolerance > 0):
+        raise ValueError("mirror must be auto or none with a positive mirror_tolerance")
+    structure_names = [s.name for s in config.structures]
+    if len(set(structure_names)) != len(structure_names) or any(
+            not s.name or not s.position.finite or not math.isfinite(s.yaw)
+            for s in config.structures):
+        raise ValueError("structure names must be unique with finite poses")
     for item in (*config.obstacles, *config.keepouts):
         if isinstance(item, Area):
             if (not item.name or len(item.polygon) < 3 or not all(p.finite for p in item.polygon)
                     or not is_convex(item.polygon)):
-                raise ValueError(f"area {item.name or '?'} must be a convex polygon; "
-                                 "split concave areas into convex parts")
+                raise ValueError(f"area {item.name or '?'} must be a convex polygon with distinct "
+                                 "vertices; split concave areas into convex parts")
         elif (len(item) != 4 or not all(math.isfinite(v) for v in item)
                 or item[0] >= item[2] or item[1] >= item[3]):
             raise ValueError("invalid obstacle rectangle")
@@ -140,7 +177,10 @@ def validate_config(config: Config) -> Config:
     for zone in config.zones:
         if (not zone.center.finite or not x0 <= zone.center.x <= x1
                 or not y0 <= zone.center.y <= y1 or not math.isfinite(zone.radius)
-                or zone.radius <= 0 or not 0 <= zone.importance <= 1):
+                or zone.radius <= 0 or not 0 <= zone.importance <= 1
+                or (zone.polygon and (len(zone.polygon) < 3
+                                      or not all(p.finite for p in zone.polygon)))
+                or (zone.structure and zone.structure not in structure_names)):
             raise ValueError(f"invalid zone {zone.name}")
     point_names = set()
     for point in config.points:
@@ -160,11 +200,40 @@ def validate_config(config: Config) -> Config:
 SENTRY_IDS = {"RED": 7, "BLUE": 107}
 
 
-def load_config(path: str | Path, own_team: str | None = None) -> Config:
-    with open(path, encoding="utf-8") as stream:
-        raw = yaml.safe_load(stream)
-    if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+def sentry_id(team: str, self_id=None) -> int:
+    """An explicit self_id wins; an invalid team is reported by validate_config."""
+    return SENTRY_IDS.get(team, 7) if self_id is None else int(self_id)
+
+
+def _parameters(raw: dict) -> dict:
+    parameters = raw.get("parameters", {}) or {}
+    if not isinstance(parameters, dict):
+        raise ValueError("parameters must be a mapping")
+    return parameters
+
+
+def load_config(path: str | Path, own_team: str | None = None, check: bool = True) -> Config:
+    path = Path(path)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or raw.get("schema_version") not in (1, 2):
         raise ValueError("unsupported tactics schema_version")
+    team = str(own_team or raw.get("own_team", "RED")).upper()
+    if raw["schema_version"] == 2:
+        from .field import field_problems, read_field
+
+        allowed = {"schema_version", "frame", "self_id", "own_team", "field", "robot_radius",
+                   "weights", "parameters"}
+        if set(raw) - allowed:
+            raise ValueError(f"unknown tactics keys: {set(raw) - allowed}")
+        config = validate_config(Config(
+            frame=raw["frame"], self_id=sentry_id(team, raw.get("self_id")),
+            robot_radius=float(raw["robot_radius"]), weights=tuple(raw["weights"]),
+            own_team=team, **read_field(raw["field"], path.parent, team), **_parameters(raw),
+        ))
+        problems = field_problems(config) if check else []
+        if problems:
+            raise ValueError("field check failed: " + "; ".join(problems))
+        return config
     allowed = {"schema_version", "frame", "self_id", "site", "bounds", "obstacles",
                "robot_radius", "zones", "points", "weights", "parameters", "own_team"}
     if set(raw) - allowed:
@@ -173,14 +242,10 @@ def load_config(path: str | Path, own_team: str | None = None) -> Config:
                        IntentType[z["intent"]], float(z["importance"])) for z in raw["zones"])
     points = tuple(Point(p["id"], p["zone"], Vec2(*p["xy"]), float(p.get("yaw", 0)),
                          tuple(TaskType[t] for t in p["tasks"])) for p in raw["points"])
-    team = str(own_team or raw.get("own_team", "RED")).upper()
-    # An explicit self_id wins; an invalid team is reported by validate_config.
-    self_id = raw.get("self_id")
     return validate_config(Config(
-        frame=raw["frame"], self_id=SENTRY_IDS.get(team, 7) if self_id is None else int(self_id),
+        frame=raw["frame"], self_id=sentry_id(team, raw.get("self_id")),
         site=raw["site"],
         bounds=tuple(raw["bounds"]), obstacles=tuple(tuple(r) for r in raw["obstacles"]),
         robot_radius=float(raw["robot_radius"]), zones=zones, points=points,
-        weights=tuple(raw["weights"]), own_team=team,
-        **raw.get("parameters", {}),
+        weights=tuple(raw["weights"]), own_team=team, **_parameters(raw),
     ))

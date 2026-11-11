@@ -85,7 +85,9 @@ class DecisionEngine:
                 denom = math.hypot(dx, dy) * enemy.velocity.norm
                 approach = max(0., (dx * enemy.velocity.x + dy * enemy.velocity.y) / denom
                                ) if denom > 1e-6 else 0.5
-                factor = 1.0 if distance <= zone.radius else 0.55 + 0.45 * approach
+                inside = (distance <= zone.radius
+                          or bool(zone.polygon) and zone.contains(enemy.position))
+                factor = 1.0 if inside else 0.55 + 0.45 * approach
                 score = min(1., enemy.confidence * zone.importance * math.exp(-eta / 8) * factor)
                 if score > best.score:
                     best = Threat(zone.name, score, enemy.robot_id, eta)
@@ -127,7 +129,7 @@ class DecisionEngine:
                 continue
             zone = zones[point.zone]
             threat = threat_by_zone.get(point.zone, Threat(point.zone, 0., None, None))
-            coverage = sum(t.position.distance(zone.center) < zone.radius for t in allies.values())
+            coverage = sum(zone.contains(t.position) for t in allies.values())
             for kind in point.tasks:
                 target = None
                 confidence, urgent = 1.0, False

@@ -37,7 +37,9 @@ class DecisionNode(Node):
         if utility:
             config = load_utility(utility, config)
         model = IntentModel.load(model_path, config) if model_path else None
-        prior = GoalPrior.load(rl_path, config, rl_blend, rl_mirror, allow_transfer) if rl_path else None
+        # rl_mirror=false follows the field: a mirrored (BLUE) field mirrors the RL features.
+        prior = (GoalPrior.load(rl_path, config, rl_blend, rl_mirror or None, allow_transfer)
+                 if rl_path else None)
         self.engine = DecisionEngine(config, model, goal_prior=prior)
         self.config = config
         self.world = None
@@ -76,7 +78,7 @@ class DecisionNode(Node):
         info = view_inputs(world, self.config)
         critical = (world.self_track is None or info.phase != Phase.RUNNING
                     or info.self_hp is not None and info.self_hp < self.config.critical_hp
-                    or any(t.usable and t.position.distance(z.center) <= z.radius
+                    or any(t.usable and z.contains(t.position)
                            for t in world.enemies for z in bases))
         if critical != self.last_critical:
             self.last_critical = critical

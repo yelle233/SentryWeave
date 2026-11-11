@@ -1,0 +1,32 @@
+# Synthetic 20 m x 12 m arena used by tests, examples and the kinematic simulator.
+# It is not a competition field; see field_rmuc2027.yaml and field_rmuc2026.yaml.
+field_version: 1
+season: demo
+site: synthetic_demo
+mirror: none
+bounds: [0.0, 0.0, 20.0, 12.0]
+obstacles:
+  - {id: center_block, rect: [9.0, 4.5, 11.0, 7.5]}
+keepouts: []
+structures:
+  own_base: {xy: [2.0, 6.0], yaw: 0.0}
+  own_outpost: {xy: [6.0, 10.5], yaw: 0.0}
+  enemy_base: {xy: [18.5, 10.5], yaw: 3.14159265}
+  enemy_outpost: {xy: [18.0, 6.0], yaw: 3.14159265}
+supply: {id: recovery, center: [2.0, 2.0], radius: 1.4, importance: 0.7}
+zones:
+  - {id: own_base, structure: own_base, center: [2.0, 6.0], radius: 3.0,
+     intent: DEFEND_BASE, importance: 1.0}
+  - {id: enemy_outpost, structure: enemy_outpost, center: [18.0, 6.0], radius: 3.5,
+     intent: ATTACK_OUTPOST, importance: 0.9}
+  - {id: center, center: [10.0, 2.0], radius: 2.5, intent: CONTEST_AREA, importance: 0.65}
+# Optional preferred positions. They are extra candidates, never a whitelist.
+points:
+  - {id: defense_south, zone: own_base, xy: [4.0, 4.0], yaw: 0.0, tasks: [DEFEND, INTERCEPT]}
+  - {id: defense_north, zone: own_base, xy: [4.0, 8.0], yaw: 0.0, tasks: [DEFEND, INTERCEPT]}
+  - {id: choke_south, zone: own_base, xy: [7.0, 4.0], yaw: 0.0, tasks: [INTERCEPT]}
+  - {id: choke_north, zone: own_base, xy: [7.0, 8.0], yaw: 0.0, tasks: [INTERCEPT]}
+  - {id: support_south, zone: enemy_outpost, xy: [15.0, 4.0], yaw: 0.0, tasks: [SUPPORT]}
+  - {id: support_north, zone: enemy_outpost, xy: [15.0, 8.0], yaw: 0.0, tasks: [SUPPORT]}
+  - {id: contest_south, zone: center, xy: [10.0, 2.0], yaw: 0.0, tasks: [SUPPORT]}
+  - {id: supply, zone: recovery, xy: [2.0, 2.0], yaw: 0.0, tasks: [RECOVER]}

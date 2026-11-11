@@ -146,7 +146,7 @@ class GoalPrior:
     filters. DT context records observed past displacement, not unexecuted plans.
     """
 
-    def __init__(self, model, config, blend=0.25, mirror=False, allow_transfer=False):
+    def __init__(self, model, config, blend=0.25, mirror=None, allow_transfer=False):
         if not math.isfinite(blend) or not 0 <= blend <= 1:
             raise ValueError("rl_blend must be in [0,1]")
         x0, y0, x1, y1 = config.bounds
@@ -155,14 +155,16 @@ class GoalPrior:
         )
         if self.domain_transfer and not allow_transfer:
             raise ValueError("RL field dimensions differ; explicit domain-transfer opt-in required")
-        self.model, self.config, self.blend, self.mirror = model, config, blend, mirror
+        # None follows the field: a mirrored (BLUE) field also mirrors the model features.
+        self.mirror = config.mirrored if mirror is None else bool(mirror)
+        self.model, self.config, self.blend = model, config, blend
         self.spec = replace(model.spec, width=x1 - x0, height=y1 - y0, origin_x=x0, origin_y=y0)
         self.model_id = hashlib.sha256(
             json.dumps(model.payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         self.reset()
 
     @classmethod
-    def load(cls, path, config, blend=0.25, mirror=False, allow_transfer=False):
+    def load(cls, path, config, blend=0.25, mirror=None, allow_transfer=False):
         return cls(NumpyNavigationPolicy.load(path), config, blend, mirror, allow_transfer)
 
     def reset(self):

@@ -63,7 +63,7 @@ class IntentEstimator:
                             0.5 + (old - distance) / (2 * self.config.nominal_speed * span),
                             0, 1,
                         )
-                inside = float(track.position.distance(zone.center) <= zone.radius)
+                inside = float(zone.contains(track.position))
                 options.append((alignment, progress, inside, math.exp(-distance / 5.0), 1.0))
             values.extend(max(options, key=lambda f: f[2] + f[3]))
         return tuple(float(v) for v in values)

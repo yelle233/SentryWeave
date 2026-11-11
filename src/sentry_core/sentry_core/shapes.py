@@ -4,6 +4,9 @@ import math
 
 from .model import Vec2
 
+# Shorter polygon edges count as repeated vertices (metres).
+MIN_EDGE = 1e-6
+
 
 def rectangle(x0: float, y0: float, x1: float, y1: float) -> tuple[Vec2, ...]:
     return Vec2(x0, y0), Vec2(x1, y0), Vec2(x1, y1), Vec2(x0, y1)
@@ -25,12 +28,19 @@ def area_polygon(item) -> tuple[Vec2, ...]:
 
 
 def is_convex(points) -> bool:
+    """Convex with nonzero area and distinct vertices.
+
+    A repeated vertex (e.g. a closed ring) leaves a zero-length edge, which has no
+    normal for ``inflate``; such polygons are invalid.
+    """
     points = ccw(points)
     n = len(points)
     if n < 3 or abs(signed_area(points)) <= 1e-6:
         return False
     for i in range(n):
         a, b, c = points[i], points[(i + 1) % n], points[(i + 2) % n]
+        if a.distance(b) <= MIN_EDGE:
+            return False
         if (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x) < -1e-9:
             return False
     return True

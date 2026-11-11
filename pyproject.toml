@@ -27,6 +27,7 @@ rl = ["torch>=2.7,<3", "safetensors>=0.5,<1", "py7zr>=1,<2"]
 [project.scripts]
 sentry-train = "sentry_training.cli:main"
 sentry-rl = "sentry_training.offline.cli:main"
+sentry-field = "sentry_core.fieldcheck:main"
 
 [tool.setuptools.packages.find]
 where = ["src/sentry_core", "src/sentry_training", "src/sentry_ros"]

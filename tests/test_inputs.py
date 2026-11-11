@@ -165,7 +165,9 @@ def test_self_id_follows_own_team_unless_set_explicitly(tmp_path):
 
     tactics = ROOT / "src/sentry_bringup/config/tactics.yaml"
     raw = yaml.safe_load(tactics.read_text(encoding="utf-8"))
-    del raw["self_id"]
+    # The demo tactics omit self_id; keep their relative field file reachable from tmp_path.
+    assert "self_id" not in raw
+    raw["field"] = str(tactics.parent / raw["field"])
     path = tmp_path / "tactics.yaml"
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
     assert load_config(path).self_id == 7
@@ -175,5 +177,7 @@ def test_self_id_follows_own_team_unless_set_explicitly(tmp_path):
     assert load_config(path, own_team="RED").self_id == 7
     with pytest.raises(ValueError, match="own_team"):
         load_config(path, own_team="GREEN")
-    explicit = load_config(tactics, own_team="BLUE")
+    assert load_config(tactics, own_team="BLUE").self_id == 107
+    path.write_text(yaml.safe_dump({**raw, "self_id": 7}), encoding="utf-8")
+    explicit = load_config(path, own_team="BLUE")
     assert (explicit.own_team, explicit.self_id) == ("BLUE", 7)
