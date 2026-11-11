@@ -4,7 +4,10 @@ from dataclasses import dataclass
 import math
 
 from .config import Config
-from .model import Observation, Phase, Referee, Team, Track, TrackStatus, Vec2, World
+from .model import (
+    TEAM_COLORS, GameState, Observation, Phase, Referee, RobotStatus, StructureState, Team, Track,
+    TrackStatus, Vec2, World,
+)
 
 
 @dataclass
@@ -16,11 +19,38 @@ class _History:
     pending_jump: Observation | None = None
 
 
+class _Fields:
+    """Latest valid value of each field, with that value's own source time and source bits."""
+
+    def __init__(self):
+        self.values: dict[str, tuple[object, float, int]] = {}
+
+    def merge(self, values: dict, stamp: float, source: int) -> None:
+        for name, value in values.items():
+            old = self.values.get(name)
+            if value is not None and (old is None or stamp >= old[1]):
+                self.values[name] = (value, stamp, source)
+
+    def fresh(self, now: float, timeout: float):
+        items = {name: item for name, item in self.values.items()
+                 if -0.05 <= now - item[1] <= timeout}
+        if not items:
+            return None
+        source = 0
+        for _, _, bits in items.values():
+            source |= bits
+        return ({name: item[0] for name, item in items.items()},
+                max(item[1] for item in items.values()), source)
+
+
 class WorldModel:
     def __init__(self, config: Config):
         self.config = config
         self._tracks: dict[tuple[Team, int], _History] = {}
         self._referee: Referee | None = None
+        self._game = _Fields()
+        self._robots: dict[int, tuple[Team, _Fields]] = {}
+        self._structures: dict[str, _Fields] = {}
         self._last_now: float | None = None
         self._generation = 0
         self._epoch = 0
@@ -33,6 +63,9 @@ class WorldModel:
         if self._last_now is not None and now < self._last_now - 0.001:
             self._tracks.clear()
             self._referee = None
+            self._game = _Fields()
+            self._robots.clear()
+            self._structures.clear()
             self._epoch += 1
         self._last_now = now
 
@@ -128,6 +161,97 @@ class WorldModel:
         self._referee = referee
         return True
 
+    def _accept(self, stamp: float, received_at: float, timeout: float, source: int) -> bool:
+        return (math.isfinite(stamp) and 0 <= stamp <= received_at + 0.05
+                and received_at - stamp <= timeout and isinstance(source, int) and source >= 0)
+
+    def update_game(self, game: GameState, received_at: float) -> bool:
+        self._clock(received_at)
+        if (not self._accept(game.stamp, received_at, self.config.game_timeout, game.source)
+                or game.phase not in Phase
+                or (game.own_team is not None and game.own_team not in TEAM_COLORS)
+                or (game.remaining is not None
+                    and (not math.isfinite(game.remaining) or game.remaining < 0))
+                or (game.supply_available is not None
+                    and not isinstance(game.supply_available, bool))):
+            self.rejections += 1
+            return False
+        self._game.merge({
+            "season": game.season or None, "own_team": game.own_team,
+            "phase": game.phase if game.phase != Phase.UNKNOWN else None,
+            "remaining": game.remaining, "supply_available": game.supply_available,
+        }, game.stamp, game.source)
+        return True
+
+    def update_robot(self, status: RobotStatus, received_at: float) -> bool:
+        self._clock(received_at)
+        numbers = (status.hp, status.max_hp, status.ammo)
+        valid = (
+            1 <= status.robot_id <= 65535 and status.team in (Team.ALLY, Team.ENEMY)
+            and self._accept(status.stamp, received_at, self.config.robot_status_timeout,
+                             status.source)
+            and all(v is None or math.isfinite(v) for v in numbers)
+            and (status.hp is None or status.hp >= 0)
+            and (status.max_hp is None or status.max_hp > 0)
+            and (status.ammo is None or 0 <= status.ammo <= 1)
+            and (status.level is None or (isinstance(status.level, int) and status.level >= 0))
+            and (status.alive is None or isinstance(status.alive, bool))
+        )
+        entry = self._robots.get(status.robot_id)
+        if (not valid or (entry is not None and entry[0] != status.team)
+                or (entry is None and len(self._robots) >= self.config.max_tracks)):
+            self.rejections += 1
+            return False
+        if entry is None:
+            entry = self._robots[status.robot_id] = (status.team, _Fields())
+        entry[1].merge({"hp": status.hp, "max_hp": status.max_hp, "alive": status.alive,
+                        "level": status.level, "ammo": status.ammo}, status.stamp, status.source)
+        return True
+
+    def update_structure(self, state: StructureState, received_at: float) -> bool:
+        self._clock(received_at)
+        numbers = (state.hp, state.max_hp, state.shield)
+        valid = (
+            isinstance(state.name, str) and 0 < len(state.name) <= 64
+            and self._accept(state.stamp, received_at, self.config.structure_timeout, state.source)
+            and all(v is None or (math.isfinite(v) and v >= 0) for v in numbers)
+            and (state.max_hp is None or state.max_hp > 0)
+            and (state.alive is None or isinstance(state.alive, bool))
+        )
+        if not valid or (state.name not in self._structures and len(self._structures) >= 16):
+            self.rejections += 1
+            return False
+        self._structures.setdefault(state.name, _Fields()).merge(
+            {"hp": state.hp, "max_hp": state.max_hp, "alive": state.alive, "shield": state.shield},
+            state.stamp, state.source)
+        return True
+
+    def _typed_inputs(self, now: float):
+        game = None
+        fresh = self._game.fresh(now, self.config.game_timeout)
+        if fresh is not None:
+            values, stamp, source = fresh
+            game = GameState(stamp, values.get("season", ""), values.get("own_team"),
+                             values.get("phase", Phase.UNKNOWN), values.get("remaining"),
+                             values.get("supply_available"), source)
+        robots = {}
+        for robot_id, (team, fields) in list(self._robots.items()):
+            fresh = fields.fresh(now, self.config.robot_status_timeout)
+            if fresh is None:
+                del self._robots[robot_id]
+                continue
+            values, stamp, source = fresh
+            robots[robot_id] = RobotStatus(robot_id, team, stamp, source=source, **values)
+        structures = {}
+        for name, fields in list(self._structures.items()):
+            fresh = fields.fresh(now, self.config.structure_timeout)
+            if fresh is None:
+                del self._structures[name]
+                continue
+            values, stamp, source = fresh
+            structures[name] = StructureState(name, stamp, source=source, **values)
+        return game, robots, structures
+
     def snapshot(self, now: float) -> World:
         self._clock(now)
         self._seq += 1
@@ -168,5 +292,6 @@ class WorldModel:
             mode = "FULL"
         else:
             mode = "PARTIAL"
+        game, robots, structures = self._typed_inputs(now)
         return World(self._seq, now, own, allies, enemies, referee, mode,
-                     self.config.frame, self._epoch)
+                     self.config.frame, self._epoch, game, robots, structures)

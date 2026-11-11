@@ -1,7 +1,8 @@
 """Value objects shared by online decisions, training and replay.
 
 Times are seconds in one observation clock. Executor deadlines additionally use
-a separate monotonic clock. Optional referee fields mean unknown, never zero.
+a separate monotonic clock. Optional referee, game, robot and structure fields
+mean unknown, never zero and never full.
 """
 
 from dataclasses import dataclass, field
@@ -106,6 +107,82 @@ class Referee:
     remaining: float | None = None
 
 
+# Source bits shared by GameStatus, RobotStatus and StructureState messages.
+SOURCE_REFEREE = 1
+SOURCE_RADAR = 2
+SOURCE_ONBOARD = 4
+SOURCE_TEAM = 8
+TEAM_COLORS = ("RED", "BLUE")
+STRUCTURE_IDS = ("own_base", "own_outpost", "enemy_base", "enemy_outpost")
+
+
+def _ratio(value: float | None, maximum: float | None) -> float | None:
+    if value is None or maximum is None or maximum <= 0:
+        return None
+    return min(1.0, max(0.0, value / maximum))
+
+
+@dataclass(frozen=True)
+class GameState:
+    """Game-level referee information. None or Phase.UNKNOWN means unknown."""
+
+    stamp: float
+    season: str = ""
+    own_team: str | None = None
+    phase: Phase = Phase.UNKNOWN
+    remaining: float | None = None
+    supply_available: bool | None = None
+    source: int = SOURCE_REFEREE
+
+
+@dataclass(frozen=True)
+class RobotStatus:
+    """One robot's status; ``team`` is relative to the own team, like tracks."""
+
+    robot_id: int
+    team: Team
+    stamp: float
+    hp: float | None = None
+    max_hp: float | None = None
+    alive: bool | None = None
+    level: int | None = None
+    ammo: float | None = None
+    source: int = 0
+
+    @property
+    def hp_ratio(self) -> float | None:
+        return _ratio(self.hp, self.max_hp)
+
+    @property
+    def known_alive(self) -> bool | None:
+        if self.alive is not None:
+            return self.alive
+        return None if self.hp is None else self.hp > 0
+
+
+@dataclass(frozen=True)
+class StructureState:
+    """Base, outpost or field-defined structure; unknown values stay None."""
+
+    name: str
+    stamp: float
+    hp: float | None = None
+    max_hp: float | None = None
+    alive: bool | None = None
+    shield: float | None = None
+    source: int = 0
+
+    @property
+    def hp_ratio(self) -> float | None:
+        return _ratio(self.hp, self.max_hp)
+
+    @property
+    def known_alive(self) -> bool | None:
+        if self.alive is not None:
+            return self.alive
+        return None if self.hp is None else self.hp > 0
+
+
 @dataclass(frozen=True)
 class World:
     seq: int
@@ -117,6 +194,9 @@ class World:
     mode: str = "SAFE_STOP"
     frame: str = "map"
     epoch: int = 0
+    game: GameState | None = None
+    robots: dict[int, RobotStatus] = field(default_factory=dict)
+    structures: dict[str, StructureState] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

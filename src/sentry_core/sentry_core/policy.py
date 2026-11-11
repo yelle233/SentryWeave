@@ -6,6 +6,7 @@ import uuid
 
 from .config import Config, validate_config
 from .geometry import TacticalMap
+from .inputs import view_inputs
 from .intent import IntentEstimator
 from .model import Candidate, Decision, IntentType, Phase, Task, TaskType, Threat, World
 
@@ -21,12 +22,14 @@ def safety_reason(world: World, config: Config, arena: TacticalMap) -> str | Non
             or not -0.05 <= world.stamp - track.observed_at <= config.self_timeout
             or not arena.legal(track.position)):
         return "LOCALIZATION_INVALID"
-    ref = world.referee
-    if ref is None or not -0.05 <= world.stamp - ref.stamp <= config.referee_timeout:
-        return "REFEREE_STALE"
-    if ref.phase != Phase.RUNNING:
+    info = view_inputs(world, config)
+    if info.phase == Phase.UNKNOWN:
+        return "GAME_STATE_UNKNOWN"
+    if info.phase != Phase.RUNNING:
         return "GAME_NOT_RUNNING"
-    if ref.hp is not None and ref.hp <= 0:
+    if info.own_team is not None and info.own_team != config.own_team:
+        return "TEAM_MISMATCH"
+    if info.self_alive is False or (info.self_hp is not None and info.self_hp <= 0):
         return "ROBOT_DISABLED"
     return None
 
@@ -96,12 +99,13 @@ class DecisionEngine:
                          0., 1., bool(unsafe), unsafe or "NO_FEASIBLE_TASK")
         if unsafe:
             return [hold], [unsafe]
-        ref, own = world.referee, world.self_track
-        hp = ref.hp if ref.hp is not None else 0.5
-        can_supply = config.supply_enabled and ref.supply_available is True
-        need_supply = ((ref.hp is not None and ref.hp < config.critical_hp)
-                       or (ref.ammo is not None and ref.ammo < 0.1))
-        if self._recovering and ref.hp is not None and ref.hp >= config.recovered_hp:
+        info, own = view_inputs(world, config), world.self_track
+        own_hp, own_ammo = info.self_hp, info.self_ammo
+        hp = own_hp if own_hp is not None else 0.5
+        can_supply = config.supply_enabled and info.supply_available is True
+        need_supply = ((own_hp is not None and own_hp < config.critical_hp)
+                       or (own_ammo is not None and own_ammo < 0.1))
+        if self._recovering and own_hp is not None and own_hp >= config.recovered_hp:
             self._recovering = False
         self._recovering = can_supply and (need_supply or self._recovering)
         results, rejected = [hold], []
@@ -130,7 +134,7 @@ class DecisionEngine:
                 value, cooperation, urgency, risk = 0., 0., 0., (1 - hp) * 0.3
                 reason = ""
                 if kind == TaskType.DEFEND:
-                    value = 0.42 + (0.12 if ref.own_outpost is False else 0.)
+                    value = 0.42 + (0.12 if info.structures["own_outpost"] is False else 0.)
                     cooperation = 0.18 / (1 + coverage)
                     urgency, reason = 0.15 + 0.8 * threat.score, "AREA_UNCOVERED"
                 elif kind == TaskType.INTERCEPT:
@@ -143,10 +147,11 @@ class DecisionEngine:
                     risk += 0.12
                     reason = "BASE_THREAT"
                 elif kind == TaskType.SUPPORT:
-                    if ref.hp is None or hp < 0.35 or ref.ammo is None or ref.ammo < 0.1:
+                    if own_hp is None or hp < 0.35 or own_ammo is None or own_ammo < 0.1:
                         rejected.append(f"{point.name}:RESOURCES_UNCERTAIN_OR_LOW")
                         continue
-                    if zone.intent == IntentType.ATTACK_OUTPOST and ref.enemy_outpost is not True:
+                    if (zone.intent == IntentType.ATTACK_OUTPOST
+                            and info.structures["enemy_outpost"] is not True):
                         rejected.append(f"{point.name}:OUTPOST_NOT_CONFIRMED_ALIVE")
                         continue
                     supporting = [i for i in intents if i.valid and i.zone_id == zone.name
@@ -163,11 +168,11 @@ class DecisionEngine:
                     reason = "TEAM_SUPPORT_HIGH" if not self.baseline else "FIXED_OUTPOST_RULE"
                 elif kind == TaskType.RECOVER:
                     if not can_supply or not (self._recovering
-                                              or (ref.hp is not None and ref.hp < 0.6)
-                                              or (ref.ammo is not None and ref.ammo < 0.2)):
+                                              or (own_hp is not None and own_hp < 0.6)
+                                              or (own_ammo is not None and own_ammo < 0.2)):
                         continue
                     value, cooperation = 0.8, 0.4
-                    urgency = max(1 - hp, 1 - (ref.ammo if ref.ammo is not None else 1))
+                    urgency = max(1 - hp, 1 - (own_ammo if own_ammo is not None else 1))
                     urgent, reason = self._recovering, "LOW_RESOURCES"
                 key = kind, point.zone, target, point.name
                 switching = float(self.current is not None and self.current.key != key)

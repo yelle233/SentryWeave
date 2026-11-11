@@ -46,7 +46,8 @@ class NavigationSpec:
         return asdict(self)
 
 
-def encode_world(world: World, spec: NavigationSpec, mirror=False) -> np.ndarray:
+def encode_world(world: World, spec: NavigationSpec, mirror=False, inputs=None) -> np.ndarray:
+    """``inputs`` is an optional InputView; without it the legacy Referee is read."""
     own = world.self_track
     if own is None or not own.usable:
         raise ValueError("navigation policy requires a valid self pose")
@@ -56,8 +57,13 @@ def encode_world(world: World, spec: NavigationSpec, mirror=False) -> np.ndarray
     if mirror:
         px, py = 1. - px, 1. - py
     ref = world.referee
-    hp = ref.hp if ref else None
-    remaining = ref.remaining if ref else None
+    if inputs is not None:
+        hp, remaining = inputs.self_hp, inputs.remaining
+        outposts = (inputs.structures.get("own_outpost"), inputs.structures.get("enemy_outpost"))
+    else:
+        hp = ref.hp if ref else None
+        remaining = ref.remaining if ref else None
+        outposts = ((ref.own_outpost if ref else None), (ref.enemy_outpost if ref else None))
     values = [
         px, py,
         sign * own.velocity.x / spec.speed_scale if own.velocity_valid else 0.,
@@ -67,7 +73,7 @@ def encode_world(world: World, spec: NavigationSpec, mirror=False) -> np.ndarray
         min(1., max(0., remaining / spec.regulation_seconds)) if remaining is not None else 0.,
         float(remaining is not None),
     ]
-    for alive in ((ref.own_outpost if ref else None), (ref.enemy_outpost if ref else None)):
+    for alive in outposts:
         values.extend((float(alive) if alive is not None else 0., float(alive is not None)))
     for tracks in (world.allies, world.enemies):
         nearest = sorted(

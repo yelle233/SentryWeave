@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from .model import IntentType, TaskType, Vec2
+from .model import TEAM_COLORS, IntentType, TaskType, Vec2
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,10 @@ class Config:
     nominal_speed: float = 1.5
     supply_enabled: bool = True
     max_tracks: int = 32
+    own_team: str = "RED"
+    game_timeout: float = 2.0
+    robot_status_timeout: float = 2.0
+    structure_timeout: float = 5.0
 
     @property
     def map_fingerprint(self) -> str:
@@ -79,9 +83,12 @@ def validate_config(config: Config) -> Config:
         raise ValueError("invalid map bounds")
     if not config.frame or not 1 <= config.self_id <= 65535:
         raise ValueError("invalid frame or self_id")
+    if config.own_team not in TEAM_COLORS:
+        raise ValueError("own_team must be RED or BLUE")
     for name in ("robot_radius", "observed_age", "predicted_age", "self_timeout",
                  "referee_timeout", "retention", "max_speed", "history_sec", "cooldown",
-                 "task_lease", "nominal_speed", "ally_clearance"):
+                 "task_lease", "nominal_speed", "ally_clearance", "game_timeout",
+                 "robot_status_timeout", "structure_timeout"):
         if not math.isfinite(getattr(config, name)) or getattr(config, name) <= 0:
             raise ValueError(f"{name} must be finite and positive")
     if not config.observed_age < config.predicted_age < config.retention:
@@ -128,22 +135,31 @@ def validate_config(config: Config) -> Config:
     return config
 
 
-def load_config(path: str | Path) -> Config:
+# Official referee ids of each team's sentry, used when a tactics file omits self_id.
+SENTRY_IDS = {"RED": 7, "BLUE": 107}
+
+
+def load_config(path: str | Path, own_team: str | None = None) -> Config:
     with open(path, encoding="utf-8") as stream:
         raw = yaml.safe_load(stream)
     if not isinstance(raw, dict) or raw.get("schema_version") != 1:
         raise ValueError("unsupported tactics schema_version")
     allowed = {"schema_version", "frame", "self_id", "site", "bounds", "obstacles",
-               "robot_radius", "zones", "points", "weights", "parameters"}
+               "robot_radius", "zones", "points", "weights", "parameters", "own_team"}
     if set(raw) - allowed:
         raise ValueError(f"unknown tactics keys: {set(raw) - allowed}")
     zones = tuple(Zone(z["id"], Vec2(*z["center"]), float(z["radius"]),
                        IntentType[z["intent"]], float(z["importance"])) for z in raw["zones"])
     points = tuple(Point(p["id"], p["zone"], Vec2(*p["xy"]), float(p.get("yaw", 0)),
                          tuple(TaskType[t] for t in p["tasks"])) for p in raw["points"])
+    team = str(own_team or raw.get("own_team", "RED")).upper()
+    # An explicit self_id wins; an invalid team is reported by validate_config.
+    self_id = raw.get("self_id")
     return validate_config(Config(
-        frame=raw["frame"], self_id=int(raw["self_id"]), site=raw["site"],
+        frame=raw["frame"], self_id=SENTRY_IDS.get(team, 7) if self_id is None else int(self_id),
+        site=raw["site"],
         bounds=tuple(raw["bounds"]), obstacles=tuple(tuple(r) for r in raw["obstacles"]),
         robot_radius=float(raw["robot_radius"]), zones=zones, points=points,
-        weights=tuple(raw["weights"]), **raw.get("parameters", {}),
+        weights=tuple(raw["weights"]), own_team=team,
+        **raw.get("parameters", {}),
     ))

@@ -3,7 +3,10 @@
 from dataclasses import asdict
 import json
 
-from .model import Observation, Phase, Referee, Team, Track, TrackStatus, Vec2, World
+from .model import (
+    GameState, Observation, Phase, Referee, RobotStatus, StructureState, Team, Track, TrackStatus,
+    Vec2, World,
+)
 
 
 def json_line(value) -> str:
@@ -29,10 +32,15 @@ def world_from_dict(raw: dict) -> World:
                      tuple(observation(o) for o in t.get("history", [])))
 
     referee = raw.get("referee")
+    game = raw.get("game")
     return World(
         raw["seq"], raw["stamp"], track(raw.get("self_track")),
         tuple(track(t) for t in raw.get("allies", [])),
         tuple(track(t) for t in raw.get("enemies", [])),
         Referee(**{**referee, "phase": Phase(referee["phase"])}) if referee else None,
         raw["mode"], raw["frame"], raw.get("epoch", 0),
+        GameState(**{**game, "phase": Phase(game["phase"])}) if game else None,
+        {int(key): RobotStatus(**{**value, "team": Team(value["team"])})
+         for key, value in raw.get("robots", {}).items()},
+        {key: StructureState(**value) for key, value in raw.get("structures", {}).items()},
     )

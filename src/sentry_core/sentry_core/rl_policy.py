@@ -7,6 +7,7 @@ import hashlib
 
 import numpy as np
 
+from .inputs import view_inputs
 from .model import TaskType, Vec2
 from .navigation_features import FEATURE_NAMES, FEATURE_VERSION, NavigationSpec, encode_world
 
@@ -182,7 +183,8 @@ class GoalPrior:
             self.reset()
         if self.last_update is not None and world.stamp - self.last_update < self.spec.horizon:
             return
-        observation = encode_world(world, self.spec, self.mirror)
+        inputs = view_inputs(world, self.config)
+        observation = encode_world(world, self.spec, self.mirror, inputs)
         if self.first_time is None:
             self.first_time = world.stamp
         if self.frames:
@@ -192,7 +194,7 @@ class GoalPrior:
                 sign * (own.position.x - old_position.x) / self.spec.width,
                 sign * (own.position.y - old_position.y) / self.spec.height,
             ], dtype=np.float32))
-        remaining = world.referee.remaining if world.referee else None
+        remaining = inputs.remaining
         timestep = (max(0., self.spec.regulation_seconds - remaining) if remaining is not None else
                     max(0., world.stamp - self.first_time))
         self.frames.append((observation, world.stamp, int(timestep), own.position))
