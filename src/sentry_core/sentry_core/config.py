@@ -9,6 +9,15 @@ from pathlib import Path
 import yaml
 
 from .model import TEAM_COLORS, IntentType, TaskType, Vec2
+from .shapes import area_polygon, inflate, is_convex
+
+
+@dataclass(frozen=True)
+class Area:
+    """Convex obstacle or rule keep-out polygon in the map frame."""
+
+    name: str
+    polygon: tuple[Vec2, ...]
 
 
 @dataclass(frozen=True)
@@ -35,7 +44,8 @@ class Config:
     self_id: int
     site: str
     bounds: tuple[float, float, float, float]
-    obstacles: tuple[tuple[float, float, float, float], ...]
+    # Physical obstacles: [x0, y0, x1, y1] rectangles or convex Area polygons.
+    obstacles: tuple[tuple[float, float, float, float] | Area, ...]
     robot_radius: float
     zones: tuple[Zone, ...]
     points: tuple[Point, ...]
@@ -65,11 +75,14 @@ class Config:
     game_timeout: float = 2.0
     robot_status_timeout: float = 2.0
     structure_timeout: float = 5.0
+    # Rule-prohibited areas for this robot (convex Area polygons).
+    keepouts: tuple[Area, ...] = ()
+    grid_resolution: float = 0.1
 
     @property
     def map_fingerprint(self) -> str:
         values = {key: asdict(self)[key] for key in
-                  ("frame", "bounds", "obstacles", "robot_radius", "zones", "points")}
+                  ("frame", "bounds", "obstacles", "keepouts", "robot_radius", "zones", "points")}
         return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
@@ -111,10 +124,19 @@ def validate_config(config: Config) -> Config:
     if not {IntentType.ATTACK_OUTPOST, IntentType.DEFEND_BASE,
             IntentType.CONTEST_AREA, IntentType.RETREAT} <= roles:
         raise ValueError("map needs attack, defense, contest and recovery zones")
-    for rect in config.obstacles:
-        if (len(rect) != 4 or not all(math.isfinite(v) for v in rect)
-                or rect[0] >= rect[2] or rect[1] >= rect[3]):
+    if not math.isfinite(config.grid_resolution) or not 0.02 <= config.grid_resolution <= 1.0:
+        raise ValueError("grid_resolution must be in [0.02, 1.0] m")
+    for item in (*config.obstacles, *config.keepouts):
+        if isinstance(item, Area):
+            if (not item.name or len(item.polygon) < 3 or not all(p.finite for p in item.polygon)
+                    or not is_convex(item.polygon)):
+                raise ValueError(f"area {item.name or '?'} must be a convex polygon; "
+                                 "split concave areas into convex parts")
+        elif (len(item) != 4 or not all(math.isfinite(v) for v in item)
+                or item[0] >= item[2] or item[1] >= item[3]):
             raise ValueError("invalid obstacle rectangle")
+    exclusions = [inflate(area_polygon(item), config.robot_radius)[0]
+                  for item in (*config.obstacles, *config.keepouts)]
     for zone in config.zones:
         if (not zone.center.finite or not x0 <= zone.center.x <= x1
                 or not y0 <= zone.center.y <= y1 or not math.isfinite(zone.radius)
@@ -127,9 +149,8 @@ def validate_config(config: Config) -> Config:
                 or not x0 < point.position.x < x1 or not y0 < point.position.y < y1
                 or not point.tasks):
             raise ValueError(f"invalid tactical point {point.name}")
-        if any(a - config.robot_radius <= point.position.x <= c + config.robot_radius
-               and b - config.robot_radius <= point.position.y <= d + config.robot_radius
-               for a, b, c, d in config.obstacles):
+        if any(all(nx * point.position.x + ny * point.position.y <= c for nx, ny, c in rows)
+               for rows in exclusions):
             raise ValueError(f"tactical point {point.name} lies in an obstacle")
         point_names.add(point.name)
     return config

@@ -1,4 +1,4 @@
-"""Rasterize tactical exclusions into a Nav2 KeepoutFilter mask.
+"""Rasterize tactical obstacles and keep-outs into a Nav2 KeepoutFilter mask.
 
 The mask spans the complete navigation map, including areas outside the legal
 tactical bounds. It remains active during Nav2 replanning and recovery.
@@ -12,6 +12,7 @@ import numpy as np
 import yaml
 
 from .config import Config
+from .shapes import area_polygon, inflate
 
 
 def _image_size(path):
@@ -55,9 +56,11 @@ def render_keepout(config: Config, map_yaml, output_directory) -> Path:
     a, b, c, d = config.bounds
     forbidden = ((x <= a + radius) | (x >= c - radius)
                  | (y <= b + radius) | (y >= d - radius))
-    for x0, y0, x1, y1 in config.obstacles:
-        forbidden |= ((x >= x0 - radius) & (x <= x1 + radius)
-                      & (y >= y0 - radius) & (y <= y1 + radius))
+    for item in (*config.obstacles, *config.keepouts):
+        inside = np.ones(x.shape, dtype=bool)
+        for nx, ny, c in inflate(area_polygon(item), radius)[0]:
+            inside &= nx * x + ny * y <= c
+        forbidden |= inside
     pixels = np.where(forbidden, 0, 254).astype(np.uint8)
     directory = Path(output_directory)
     directory.mkdir(parents=True, exist_ok=True)
