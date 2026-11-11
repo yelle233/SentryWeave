@@ -1,0 +1,31 @@
+# RMUC 2027 tactics. Field semantics: field_rmuc2027.yaml (red perspective, mirror: auto).
+# Set own_team (or the own_team launch argument) to match the referee inputs. self_id is
+# omitted on purpose: it follows own_team (RED -> 7, BLUE -> 107); set it only for another id.
+schema_version: 2
+frame: map
+own_team: RED
+field: field_rmuc2027.yaml
+# Assumed sentry radius (owner-approved); measure your robot.
+robot_radius: 0.35
+weights: [0.22, 0.24, 0.28, 0.12, 0.10, 0.04]
+parameters:
+  observed_age: 0.3
+  predicted_age: 0.9
+  self_timeout: 0.5
+  referee_timeout: 2.0
+  game_timeout: 2.0
+  robot_status_timeout: 2.0
+  structure_timeout: 5.0
+  min_hold: 3.0
+  switch_margin: 0.08
+  confirm_cycles: 3
+  cooldown: 5.0
+  task_lease: 2.0
+  intent_threshold: 0.35
+  critical_hp: 0.25
+  recovered_hp: 0.7
+  urgent_threat: 0.72
+  supply_enabled: true
+  # Ground robots expected besides this sentry; missing ones lower information completeness.
+  expected_allies: 3
+  expected_enemies: 4

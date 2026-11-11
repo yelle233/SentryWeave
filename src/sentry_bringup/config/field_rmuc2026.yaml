@@ -1,0 +1,98 @@
+# RMUC 2026 field semantics (red perspective; mirror: auto reflects through (14, 7.5) for BLUE).
+# Numbers derived from Arena-1 (github.com/RM-Arena/Arena-1) e70c1f010edf, config/rules.json maps.rmuc2026 (layout chapter4-2026-v3),
+# which Arena-1 drew from the 2026 rules manual v1.0.0 chapter 4; rounded to 1 mm. Same frame
+# as field_rmuc2027.yaml (no conversion). The outpost bodies are 0.6 m footprint estimates:
+# Arena-1 models them as 0.09 m-radius pillars. Obstacles and keep-outs follow the same rules as
+# field_rmuc2027.yaml, plus the fly-slope highway keep-outs on both sides (owner-less in Arena-1).
+# Assumptions (owner-approved; check them on your own robot and field):
+# - sentry radius 0.35 m (robot_radius in tactics_rmuc2026.yaml);
+# - tunnels, high points (helipads) and steps are obstacles, as is the trapezoid buff platform,
+#   which only a 43° ramp reaches;
+# - the 23° trapezoid ramps are drivable, like the gentler slopes and the bump strips;
+# - the outpost footprint is the 0.6 m estimate above.
+# Source note only: numbers were read from Arena-1 (non-commercial licence); no Arena-1 code is
+# included in this repository. Survey your own field before matches.
+field_version: 1
+season: rmuc2026
+site: rmuc2026_arena1
+source: "Arena-1 (github.com/RM-Arena/Arena-1) e70c1f010edf, config/rules.json maps.rmuc2026 (layout chapter4-2026-v3)"
+mirror: auto
+bounds: [0.0, 0.0, 28.0, 15.0]
+obstacles:
+  - {id: central_kerb_0, polygon: [[12.55, 2.015], [15.55, 2.015], [15.55, 2.165], [12.55, 2.165]]}
+  - {id: central_kerb_1, polygon: [[12.45, 12.835], [15.45, 12.835], [15.45, 12.985], [12.45, 12.985]]}
+  - {id: central_kerb_2, polygon: [[12.613, 2.131], [10.213, 5.871], [10.087, 5.789], [12.487, 2.049]]}
+  - {id: central_kerb_3, polygon: [[17.913, 9.211], [15.513, 12.951], [15.387, 12.869], [17.787, 9.129]]}
+  - {id: central_kerb_4, polygon: [[10.225, 5.83], [10.225, 6.014], [10.075, 6.014], [10.075, 5.83]]}
+  - {id: central_kerb_5, polygon: [[10.225, 8.986], [10.225, 12.91], [10.075, 12.91], [10.075, 8.986]]}
+  - {id: central_kerb_6, polygon: [[17.925, 2.09], [17.925, 6.014], [17.775, 6.014], [17.775, 2.09]]}
+  - {id: central_kerb_7, polygon: [[17.925, 8.986], [17.925, 9.17], [17.775, 9.17], [17.775, 8.986]]}
+  - {id: central_kerb_8, polygon: [[16.65, 2.015], [17.85, 2.015], [17.85, 2.165], [16.65, 2.165]]}
+  - {id: central_kerb_9, polygon: [[10.15, 12.835], [11.35, 12.835], [11.35, 12.985], [10.15, 12.985]]}
+  - {id: central_red_slope_guard_0, polygon: [[11.425, 11.831], [11.425, 12.91], [11.275, 12.91], [11.275, 11.831]]}
+  - {id: central_blue_slope_guard_0, polygon: [[16.575, 3.169], [16.575, 2.09], [16.725, 2.09], [16.725, 3.169]]}
+  - {id: central_red_slope_guard_1, polygon: [[12.525, 11.831], [12.525, 12.91], [12.375, 12.91], [12.375, 11.831]]}
+  - {id: central_blue_slope_guard_1, polygon: [[15.475, 3.169], [15.475, 2.09], [15.625, 2.09], [15.625, 3.169]]}
+  - {id: red_tunnel_a_roof, polygon: [[9.79, 12.16], [9.79, 12.91], [8.99, 12.91], [8.99, 12.16]]}
+  - {id: red_tunnel_a_side, polygon: [[9.04, 12.16], [9.04, 12.91], [8.99, 12.91], [8.99, 12.16]]}
+  - {id: red_tunnel_a_side_b, polygon: [[9.79, 12.16], [9.79, 12.91], [9.74, 12.91], [9.74, 12.16]]}
+  - {id: red_tunnel_b_roof, polygon: [[14.946, 12.91], [14.946, 13.829], [14.746, 13.829], [14.746, 12.91]]}
+  - {id: red_kerb_0, polygon: [[3.15, -0.025], [13.655, -0.025], [13.655, 0.125], [3.15, 0.125]]}
+  - {id: red_kerb_1, polygon: [[3.225, 0.05], [3.225, 2.922], [3.075, 2.922], [3.075, 0.05]]}
+  - {id: red_kerb_2, polygon: [[3.75, 11.274], [6.875, 11.274], [6.875, 11.424], [3.75, 11.424]]}
+  - {id: red_kerb_3, polygon: [[3.825, 11.349], [3.825, 14.95], [3.675, 14.95], [3.675, 11.349]]}
+  - {id: red_kerb_4, polygon: [[3.75, 14.875], [9.05, 14.875], [9.05, 15.025], [3.75, 15.025]]}
+  - {id: red_kerb_5, polygon: [[5.25, 12.76], [7.651, 12.76], [7.651, 12.91], [5.25, 12.91]]}
+  - {id: red_dart_station, polygon: [[0.08, 3.54], [1.12, 3.54], [1.12, 4.46], [0.08, 4.46]]}
+  - {id: red_resource_side_0.075, polygon: [[0.1, 13.47], [0.1, 14.98], [0.05, 14.98], [0.05, 13.47]]}
+  - {id: red_resource_side_1.885, polygon: [[1.91, 13.47], [1.91, 14.98], [1.86, 14.98], [1.86, 13.47]]}
+  - {id: red_resource_back, polygon: [[0.075, 14.955], [1.885, 14.955], [1.885, 15.005], [0.075, 15.005]]}
+  - {id: blue_tunnel_a_roof, polygon: [[18.21, 2.84], [18.21, 2.09], [19.01, 2.09], [19.01, 2.84]]}
+  - {id: blue_tunnel_a_side, polygon: [[18.96, 2.84], [18.96, 2.09], [19.01, 2.09], [19.01, 2.84]]}
+  - {id: blue_tunnel_a_side_b, polygon: [[18.21, 2.84], [18.21, 2.09], [18.26, 2.09], [18.26, 2.84]]}
+  - {id: blue_tunnel_b_roof, polygon: [[13.054, 2.09], [13.054, 1.171], [13.254, 1.171], [13.254, 2.09]]}
+  - {id: blue_kerb_0, polygon: [[24.85, 15.025], [14.345, 15.025], [14.345, 14.875], [24.85, 14.875]]}
+  - {id: blue_kerb_1, polygon: [[24.775, 14.95], [24.775, 12.078], [24.925, 12.078], [24.925, 14.95]]}
+  - {id: blue_kerb_2, polygon: [[24.25, 3.726], [21.125, 3.726], [21.125, 3.576], [24.25, 3.576]]}
+  - {id: blue_kerb_3, polygon: [[24.175, 3.651], [24.175, 0.05], [24.325, 0.05], [24.325, 3.651]]}
+  - {id: blue_kerb_4, polygon: [[24.25, 0.125], [18.95, 0.125], [18.95, -0.025], [24.25, -0.025]]}
+  - {id: blue_kerb_5, polygon: [[22.75, 2.24], [20.349, 2.24], [20.349, 2.09], [22.75, 2.09]]}
+  - {id: blue_dart_station, polygon: [[27.92, 11.46], [26.88, 11.46], [26.88, 10.54], [27.92, 10.54]]}
+  - {id: blue_resource_side_0.075, polygon: [[27.9, 1.53], [27.9, 0.02], [27.95, 0.02], [27.95, 1.53]]}
+  - {id: blue_resource_side_1.885, polygon: [[26.09, 1.53], [26.09, 0.02], [26.14, 0.02], [26.14, 1.53]]}
+  - {id: blue_resource_back, polygon: [[27.925, 0.045], [26.115, 0.045], [26.115, -0.005], [27.925, -0.005]]}
+  - {id: rune_pedestal, polygon: [[14.884, 7.04], [13.54, 8.384], [13.116, 7.96], [14.46, 6.616]]}
+  - {id: rune_post_foot, polygon: [[14.445, 6.602], [14.728, 6.319], [15.181, 6.772], [14.898, 7.055]]}
+  - {id: rune_post_foot_b, polygon: [[13.555, 8.398], [13.272, 8.681], [12.819, 8.228], [13.102, 7.945]]}
+  - {id: central_west_step, polygon: [[8.506, 6.264], [8.756, 6.014], [10.15, 6.014], [10.15, 8.986], [8.756, 8.986], [8.506, 8.736]]}
+  - {id: central_east_step, polygon: [[19.494, 8.736], [19.244, 8.986], [17.85, 8.986], [17.85, 6.014], [19.244, 6.014], [19.494, 6.264]]}
+  - {id: red_trapezoid_buff, polygon: [[3.15, 3.172], [5.511, 3.172], [5.001, 4.38], [3.15, 4.38]]}
+  - {id: red_base_pedestal, polygon: [[1.466, 7.5], [1.863, 6.736], [2.952, 6.736], [3.348, 7.5], [2.787, 8.345], [2.027, 8.345]]}
+  - {id: red_helipad, polygon: [[0.3, 0.75], [2.5, 0.75], [2.5, 2.95], [0.3, 2.95]]}
+  - {id: blue_trapezoid_buff, polygon: [[24.85, 11.828], [22.489, 11.828], [22.999, 10.62], [24.85, 10.62]]}
+  - {id: blue_base_pedestal, polygon: [[26.534, 7.5], [26.137, 8.264], [25.049, 8.264], [24.652, 7.5], [25.213, 6.655], [25.973, 6.655]]}
+  - {id: blue_helipad, polygon: [[27.7, 14.25], [25.5, 14.25], [25.5, 12.05], [27.7, 12.05]]}
+  - {id: red_base_body, polygon: [[1.466, 6.655], [3.348, 6.655], [3.348, 8.345], [1.466, 8.345]]}
+  - {id: blue_base_body, polygon: [[24.652, 6.655], [26.534, 6.655], [26.534, 8.345], [24.652, 8.345]]}
+  - {id: red_outpost_body, polygon: [[10.692, 11.057], [11.292, 11.057], [11.292, 11.657], [10.692, 11.657]]}
+  - {id: blue_outpost_body, polygon: [[16.708, 3.343], [17.308, 3.343], [17.308, 3.943], [16.708, 3.943]]}
+keepouts:
+  - {id: red_highway, polygon: [[13.695, 13.829], [16.798, 13.829], [16.798, 15], [13.695, 15]]}
+  - {id: enemy_pad, polygon: [[25.35, 11.85], [27.85, 11.85], [27.85, 14.55], [25.35, 14.55]]}
+  - {id: enemy_supply, polygon: [[25.44, 0], [28, 0], [28, 3.651], [25.44, 3.651]]}
+  - {id: enemy_assembly, polygon: [[14.08, 7.58], [15.36, 7.58], [15.36, 8.86], [14.08, 8.86]]}
+  - {id: blue_highway, polygon: [[11.202, 0], [14.305, 0], [14.305, 1.171], [11.202, 1.171]]}
+structures:
+  own_base: {xy: [2.407, 7.5], yaw: 0.0}
+  own_outpost: {xy: [10.992, 11.357], yaw: 0.0}
+  enemy_base: {xy: [25.593, 7.5], yaw: 3.14159265}
+  enemy_outpost: {xy: [17.008, 3.643], yaw: 3.14159265}
+supply: {id: own_supply, polygon: [[0, 11.349], [2.56, 11.349], [2.56, 15], [0, 15]], importance: 0.7}
+zones:
+  - {id: own_base, structure: own_base, center: [2.407, 7.5], radius: 3.0, intent: DEFEND_BASE, importance: 1.0}
+  - {id: own_outpost, structure: own_outpost, center: [10.992, 11.357], radius: 2.5, intent: DEFEND_BASE, importance: 0.8}
+  - {id: enemy_outpost, structure: enemy_outpost, center: [17.008, 3.643], radius: 3.5, intent: ATTACK_OUTPOST, importance: 0.9}
+  - {id: central_highland, center: [10.95, 6.55], radius: 1.5, intent: CONTEST_AREA, importance: 0.65}
+# Preferred positions are extra candidates, never a whitelist.
+points:
+  - {id: own_fortress, zone: own_base, xy: [6.6, 7.5], yaw: 0.0, tasks: [DEFEND]}

@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "tool": "tools/benchmark_decision.py",
+  "recorded_on": "2026-11-11",
+  "policy": "rule",
+  "environment": {
+    "python": "3.12.3",
+    "numpy": "2.5.4",
+    "machine": "x86_64",
+    "processor": "x86_64",
+    "cpu_count": 28
+  },
+  "max_rss_kib": 82104,
+  "results": {
+    "demo": {
+      "steps": 200,
+      "setup_ms": 0.28116899920860305,
+      "step_wall_ms": {
+        "p50": 1.164698500360828,
+        "p95": 1.6016692021366905,
+        "max": 2.0094159990549088,
+        "mean": 1.2220399199759413
+      },
+      "step_cpu_ms": {
+        "p50": 1.1650174999999763,
+        "p95": 1.6021652500000092,
+        "max": 2.009251999999684,
+        "mean": 1.2224386750000082
+      },
+      "cpu_share_at_2hz": 0.0024448773500000166,
+      "tracemalloc_peak_kib": 1216.0244140625,
+      "tasks": {
+        "INTERCEPT": 200
+      },
+      "obstacles": 1,
+      "graph_corners": 4
+    },
+    "rmuc2027": {
+      "steps": 200,
+      "setup_ms": 115.42128799919738,
+      "step_wall_ms": {
+        "p50": 2.4757245009823237,
+        "p95": 16.219984949384514,
+        "max": 39.61507799976971,
+        "mean": 5.984829635035567
+      },
+      "step_cpu_ms": {
+        "p50": 2.476135999999851,
+        "p95": 16.220794849999354,
+        "max": 39.614943000000125,
+        "mean": 5.985359365000007
+      },
+      "cpu_share_at_2hz": 0.011970718730000014,
+      "tracemalloc_peak_kib": 3743.76953125,
+      "tasks": {
+        "INTERCEPT": 200
+      },
+      "obstacles": 77,
+      "graph_corners": 149
+    },
+    "rmuc2026": {
+      "steps": 200,
+      "setup_ms": 45.16404199966928,
+      "step_wall_ms": {
+        "p50": 2.3882030000095256,
+        "p95": 9.374325799581129,
+        "max": 23.377413999696728,
+        "mean": 3.8125561800370633
+      },
+      "step_cpu_ms": {
+        "p50": 2.3887150000003743,
+        "p95": 9.375256449999192,
+        "max": 23.37745700000049,
+        "mean": 3.812296560000101
+      },
+      "cpu_share_at_2hz": 0.0076245931200002014,
+      "tracemalloc_peak_kib": 1909.4052734375,
+      "tasks": {
+        "INTERCEPT": 200
+      },
+      "obstacles": 62,
+      "graph_corners": 113
+    }
+  },
+  "limitations": "Synthetic tracks on the tactical map; Nav2, ROS transport and real sensor load are not included."
+}

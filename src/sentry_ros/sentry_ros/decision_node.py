@@ -13,7 +13,7 @@ from sentry_interfaces.msg import (
 )
 
 from sentry_core.inputs import view_inputs
-from sentry_core.learned import IntentModel, load_utility
+from sentry_core.learned import load_decision_models
 from sentry_core.model import IntentType, Phase
 from sentry_core.policy import DecisionEngine
 from sentry_core.rl_policy import GoalPrior
@@ -34,13 +34,17 @@ class DecisionNode(Node):
         rl_blend = self.declare_parameter("rl_blend", 0.25).value
         rl_mirror = self.declare_parameter("rl_mirror", False).value
         allow_transfer = self.declare_parameter("rl_allow_transfer", False).value
-        if utility:
-            config = load_utility(utility, config)
-        model = IntentModel.load(model_path, config) if model_path else None
+        # An intent/utility artifact fitted on another field runs in rule mode instead of
+        # stopping the node; the reason is logged here and in every decision's policy_info.
+        config, model, fallbacks = load_decision_models(config, model_path, utility)
+        for name, fallback in fallbacks.items():
+            self.get_logger().warning(
+                f"{name} falls back to rule mode ({fallback['reason']}): {fallback['path']}: "
+                f"{fallback['detail']}")
         # rl_mirror=false follows the field: a mirrored (BLUE) field mirrors the RL features.
         prior = (GoalPrior.load(rl_path, config, rl_blend, rl_mirror or None, allow_transfer)
                  if rl_path else None)
-        self.engine = DecisionEngine(config, model, goal_prior=prior)
+        self.engine = DecisionEngine(config, model, goal_prior=prior, model_fallbacks=fallbacks)
         self.config = config
         self.world = None
         self.last_evaluated = None
@@ -64,8 +68,10 @@ class DecisionNode(Node):
                                                      encoding="utf-8")
             self.trace_handler.setFormatter(logging.Formatter("%(message)s"))
         algorithm = prior.model.payload["algorithm"] if prior else "utility"
+        weights = "trained" if utility and "utility_model" not in fallbacks else "tactics"
         self.get_logger().info(
-            f"Decision ready: intent={'HMM' if model else 'rule'}, goal={algorithm}; map={config.site}")
+            f"Decision ready: intent={'HMM' if model else 'rule'}, weights={weights}, "
+            f"goal={algorithm}; map={config.site}")
 
     def _world(self, message):
         try:

@@ -114,17 +114,42 @@ def test_world_node_publishes_typed_topics_and_typed_values_win(config):
         rclpy.shutdown()
 
 
+def launch_default_config_file():
+    """The config_file default shared by decision.launch.py and navigation.launch.py."""
+    import importlib.util
+    from pathlib import Path
+    from launch import LaunchContext
+    from launch.actions import DeclareLaunchArgument
+    from launch.utilities import perform_substitutions
+    from conftest import ROOT
+
+    defaults = set()
+    for name in ("decision.launch.py", "navigation.launch.py"):
+        spec = importlib.util.spec_from_file_location(
+            name.replace(".", "_"), ROOT / "src/sentry_bringup/launch" / name)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        argument = next(entity for entity in module.generate_launch_description().entities
+                        if isinstance(entity, DeclareLaunchArgument)
+                        and entity.name == "config_file")
+        defaults.add(perform_substitutions(LaunchContext(), argument.default_value))
+    assert len(defaults) == 1, defaults
+    return Path(defaults.pop())
+
+
 def test_own_team_parameter_keeps_self_id_derivation(tmp_path):
     import rclpy
     import yaml
     from rclpy.node import Node
     from rclpy.parameter import Parameter
     from sentry_ros.common import read_config
-    from conftest import ROOT
 
-    tactics = ROOT / "src/sentry_bringup/config/tactics.yaml"
+    # The launch default is the RMUC 2027 season file, which omits self_id like every bundled
+    # tactics file; an explicit copy keeps its relative field file reachable.
+    tactics = launch_default_config_file()
+    assert tactics.name == "tactics_rmuc2027.yaml"
     raw = yaml.safe_load(tactics.read_text(encoding="utf-8"))
-    # The demo tactics omit self_id; an explicit copy keeps its relative field file reachable.
+    assert "self_id" not in raw
     raw.update(self_id=7, field=str(tactics.parent / raw["field"]))
     explicit = tmp_path / "tactics.yaml"
     explicit.write_text(yaml.safe_dump(raw), encoding="utf-8")

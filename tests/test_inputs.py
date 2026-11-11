@@ -163,10 +163,15 @@ def test_self_id_follows_own_team_unless_set_explicitly(tmp_path):
     from conftest import ROOT
     from sentry_core.config import load_config
 
+    # No bundled tactics file sets self_id, including tactics_rmuc2027.yaml, the launch default:
+    # own_team BLUE must give the blue sentry id there, not an explicit 7.
+    for name in ("tactics.yaml", "tactics_rmuc2027.yaml", "tactics_rmuc2026.yaml"):
+        bundled = ROOT / "src/sentry_bringup/config" / name
+        assert "self_id" not in yaml.safe_load(bundled.read_text(encoding="utf-8")), name
+        assert load_config(bundled, own_team="BLUE").self_id == 107, name
     tactics = ROOT / "src/sentry_bringup/config/tactics.yaml"
     raw = yaml.safe_load(tactics.read_text(encoding="utf-8"))
-    # The demo tactics omit self_id; keep their relative field file reachable from tmp_path.
-    assert "self_id" not in raw
+    # Keep the demo tactics' relative field file reachable from tmp_path.
     raw["field"] = str(tactics.parent / raw["field"])
     path = tmp_path / "tactics.yaml"
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
@@ -177,7 +182,6 @@ def test_self_id_follows_own_team_unless_set_explicitly(tmp_path):
     assert load_config(path, own_team="RED").self_id == 7
     with pytest.raises(ValueError, match="own_team"):
         load_config(path, own_team="GREEN")
-    assert load_config(tactics, own_team="BLUE").self_id == 107
     path.write_text(yaml.safe_dump({**raw, "self_id": 7}), encoding="utf-8")
     explicit = load_config(path, own_team="BLUE")
     assert (explicit.own_team, explicit.self_id) == ("BLUE", 7)

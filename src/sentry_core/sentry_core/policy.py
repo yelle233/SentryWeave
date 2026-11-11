@@ -1,5 +1,6 @@
 """Constrained utility policy and hysteresis, shared by ROS and closed-loop training."""
 
+import copy
 from dataclasses import replace
 import math
 import uuid
@@ -46,7 +47,8 @@ def _down(info, robot_id: int) -> bool:
 
 class DecisionEngine:
     def __init__(self, config: Config, model=None, session_id: str | None = None,
-                 baseline: bool = False, hysteresis: bool = True, goal_prior=None):
+                 baseline: bool = False, hysteresis: bool = True, goal_prior=None,
+                 model_fallbacks: dict | None = None):
         self.config = validate_config(config)
         self.arena = TacticalMap(config)
         self.estimator = IntentEstimator(config, self.arena, model)
@@ -54,6 +56,9 @@ class DecisionEngine:
         self.session_id = session_id or uuid.uuid4().hex
         self.baseline, self.hysteresis = baseline, hysteresis
         self.goal_prior = goal_prior
+        # Configured artifacts running in rule mode and why (learned.load_decision_models);
+        # every decision repeats them in policy_info["model_fallbacks"].
+        self.model_fallbacks = copy.deepcopy(model_fallbacks or {})
         self.current: Task | None = None
         self._next_id = 0
         self._last_time: float | None = None
@@ -406,6 +411,8 @@ class DecisionEngine:
                                    valid_until=world.stamp + self.config.task_lease,
                                    utility=chosen.utility, confidence=chosen.confidence,
                                    urgent=chosen.urgent, reason=chosen.reason)
+        policy_info = dict(self.goal_prior.info) if self.goal_prior else {}
+        if self.model_fallbacks:
+            policy_info["model_fallbacks"] = copy.deepcopy(self.model_fallbacks)
         return Decision(self.current, intents, threats, tuple(candidates), tuple(rejected),
-                        arbitration, world.mode,
-                        dict(self.goal_prior.info) if self.goal_prior else {}, missing_info)
+                        arbitration, world.mode, policy_info, missing_info)

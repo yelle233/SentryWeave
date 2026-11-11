@@ -18,7 +18,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("namespace", default_value="sentry"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
-        DeclareLaunchArgument("config_file", default_value=str(share / "config/tactics.yaml")),
+        DeclareLaunchArgument("config_file",
+                              default_value=str(share / "config/tactics_rmuc2027.yaml")),
         DeclareLaunchArgument("own_team", default_value="",
                               description="RED or BLUE; empty uses own_team from config_file"),
         DeclareLaunchArgument("intent_model", default_value=""),
