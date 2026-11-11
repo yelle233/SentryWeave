@@ -7,7 +7,8 @@ from geometry_msgs.msg import PoseStamped
 from sentry_interfaces import msg as wire
 
 from sentry_core.model import (
-    IntentType, Observation, Phase, Referee, Task, TaskType, Team, Track, TrackStatus, Vec2, World,
+    GameState, IntentType, Observation, Phase, Referee, RobotStatus, StructureState, Task, TaskType,
+    Team, Track, TrackStatus, Vec2, World,
 )
 
 
@@ -130,6 +131,90 @@ def referee_from_msg(message):
     return referee
 
 
+def game_to_msg(game: GameState, frame="map"):
+    result = wire.GameStatus()
+    result.header.frame_id, result.header.stamp = frame, stamp(game.stamp)
+    result.season = game.season
+    result.own_team = {"RED": wire.GameStatus.RED, "BLUE": wire.GameStatus.BLUE}.get(
+        game.own_team, wire.GameStatus.TEAM_UNKNOWN)
+    result.phase, result.phase_valid = int(game.phase), game.phase != Phase.UNKNOWN
+    result.remaining_time_valid = game.remaining is not None
+    if game.remaining is not None:
+        result.remaining_time = float(game.remaining)
+    result.supply_valid = game.supply_available is not None
+    if game.supply_available is not None:
+        result.supply_available = game.supply_available
+    result.source = game.source
+    return result
+
+
+def game_from_msg(message) -> GameState:
+    if message.own_team not in (wire.GameStatus.TEAM_UNKNOWN, wire.GameStatus.RED,
+                                wire.GameStatus.BLUE):
+        raise ValueError("invalid own_team")
+    return GameState(
+        to_seconds(message.header.stamp), message.season,
+        {wire.GameStatus.RED: "RED", wire.GameStatus.BLUE: "BLUE"}.get(message.own_team),
+        Phase(message.phase) if message.phase_valid else Phase.UNKNOWN,
+        message.remaining_time if message.remaining_time_valid else None,
+        message.supply_available if message.supply_valid else None, message.source,
+    )
+
+
+def robot_status_to_msg(status: RobotStatus):
+    result = wire.RobotStatus()
+    result.stamp, result.robot_id, result.team = stamp(status.stamp), status.robot_id, int(status.team)
+    result.hp_valid = status.hp is not None and status.max_hp is not None
+    if result.hp_valid:
+        result.hp, result.max_hp = float(status.hp), float(status.max_hp)
+    result.alive_valid = status.alive is not None
+    if status.alive is not None:
+        result.alive = status.alive
+    result.level_valid = status.level is not None
+    if status.level is not None:
+        result.level = status.level
+    result.ammo_valid = status.ammo is not None
+    if status.ammo is not None:
+        result.ammo_ratio = float(status.ammo)
+    result.source = status.source
+    return result
+
+
+def robot_status_from_msg(message) -> RobotStatus:
+    return RobotStatus(
+        message.robot_id, Team(message.team), to_seconds(message.stamp),
+        message.hp if message.hp_valid else None, message.max_hp if message.hp_valid else None,
+        message.alive if message.alive_valid else None,
+        message.level if message.level_valid else None,
+        message.ammo_ratio if message.ammo_valid else None, message.source,
+    )
+
+
+def structure_to_msg(state: StructureState):
+    result = wire.StructureState()
+    result.stamp, result.id = stamp(state.stamp), state.name
+    result.hp_valid = state.hp is not None and state.max_hp is not None
+    if result.hp_valid:
+        result.hp, result.max_hp = float(state.hp), float(state.max_hp)
+    result.alive_valid = state.alive is not None
+    if state.alive is not None:
+        result.alive = state.alive
+    result.shield_valid = state.shield is not None
+    if state.shield is not None:
+        result.shield = float(state.shield)
+    result.source = state.source
+    return result
+
+
+def structure_from_msg(message) -> StructureState:
+    return StructureState(
+        message.id, to_seconds(message.stamp),
+        message.hp if message.hp_valid else None, message.max_hp if message.hp_valid else None,
+        message.alive if message.alive_valid else None,
+        message.shield if message.shield_valid else None, message.source,
+    )
+
+
 def world_to_msg(world: World):
     result = wire.WorldState()
     result.header.frame_id, result.header.stamp = world.frame, stamp(world.stamp)
@@ -142,6 +227,11 @@ def world_to_msg(world: World):
     result.referee_valid = world.referee is not None
     if world.referee:
         result.referee = referee_to_msg(world.referee, world.frame)
+    result.game_valid = world.game is not None
+    if world.game:
+        result.game = game_to_msg(world.game, world.frame)
+    result.robots = [robot_status_to_msg(s) for s in world.robots.values()]
+    result.structures = [structure_to_msg(s) for s in world.structures.values()]
     return result
 
 
@@ -154,6 +244,9 @@ def world_from_msg(message):
         tuple(track_from_msg(t, frame) for t in message.enemies),
         referee_from_msg(message.referee) if message.referee_valid else None,
         message.mode, frame, message.epoch,
+        game_from_msg(message.game) if message.game_valid else None,
+        {s.robot_id: s for s in map(robot_status_from_msg, message.robots)},
+        {s.name: s for s in map(structure_from_msg, message.structures)},
     )
 
 

@@ -1,4 +1,4 @@
-"""Acquisition-time TF conversion, bounded tracking and referee validity."""
+"""Acquisition-time TF conversion, bounded tracking and typed/legacy referee validity."""
 
 import copy
 from dataclasses import replace
@@ -11,12 +11,17 @@ from rclpy.time import Time
 from std_msgs.msg import Bool
 from tf2_geometry_msgs import do_transform_pose
 from tf2_ros import Buffer, TransformException, TransformListener
-from sentry_interfaces.msg import ObservationArray, RefereeState, WorldState
+from sentry_interfaces.msg import (
+    GameStatus, ObservationArray, RefereeState, RobotStatusArray, StructureStatus, WorldState,
+)
 
 from sentry_core.model import Observation, Team, Vec2
 from sentry_core.tracking import WorldModel
-from .codec import observation_from_msg, referee_from_msg, to_seconds, world_to_msg
-from .common import LATEST, read_config, seconds, spin_node
+from .codec import (
+    game_from_msg, observation_from_msg, referee_from_msg, robot_status_from_msg,
+    structure_from_msg, to_seconds, world_to_msg,
+)
+from .common import LATEST, STATUS, read_config, seconds, spin_node
 
 
 class WorldNode(Node):
@@ -34,6 +39,9 @@ class WorldNode(Node):
         self.create_subscription(ObservationArray, "perception/tracks", self._tracks, qos_profile_sensor_data)
         self.create_subscription(PoseWithCovarianceStamped, "self_pose", self._self_pose, qos_profile_sensor_data)
         self.create_subscription(RefereeState, "referee/state", self._referee, LATEST)
+        self.create_subscription(GameStatus, "game/status", self._game, LATEST)
+        self.create_subscription(RobotStatusArray, "robots/status", self._robots, STATUS)
+        self.create_subscription(StructureStatus, "structures/status", self._structures, STATUS)
         self.create_subscription(Bool, "localization_ok", self._health, LATEST)
         self.create_timer(0.1, self._tick)
 
@@ -89,6 +97,29 @@ class WorldNode(Node):
                 self.model.update_referee(value)
         except ValueError as error:
             self.get_logger().warning(str(error), throttle_duration_sec=2.)
+
+    def _game(self, message):
+        try:
+            self.model.update_game(game_from_msg(message), seconds(self))
+        except ValueError as error:
+            self.get_logger().warning(f"Dropped game status: {error}", throttle_duration_sec=2.)
+
+    def _robots(self, message):
+        now = seconds(self)
+        for item in message.robots:
+            try:
+                self.model.update_robot(robot_status_from_msg(item), now)
+            except ValueError as error:
+                self.get_logger().warning(f"Dropped robot status: {error}", throttle_duration_sec=2.)
+
+    def _structures(self, message):
+        now = seconds(self)
+        for item in message.structures:
+            try:
+                self.model.update_structure(structure_from_msg(item), now)
+            except ValueError as error:
+                self.get_logger().warning(f"Dropped structure state: {error}",
+                                          throttle_duration_sec=2.)
 
     def _tick(self):
         now = seconds(self)

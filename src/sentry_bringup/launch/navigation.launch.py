@@ -18,7 +18,8 @@ def _nodes(context):
     share = Path(get_package_share_directory("sentry_bringup"))
     namespace = LaunchConfiguration("namespace").perform(context)
     sim = LaunchConfiguration("use_sim_time").perform(context).lower() == "true"
-    tactics = load_config(LaunchConfiguration("config_file").perform(context))
+    tactics = load_config(LaunchConfiguration("config_file").perform(context),
+                          LaunchConfiguration("own_team").perform(context) or None)
     mask_directory = tempfile.mkdtemp(prefix="sentryweave-keepout-")
     mask = render_keepout(tactics, LaunchConfiguration("map").perform(context), mask_directory)
     topic_prefix = "/" + namespace.strip("/") if namespace.strip("/") else ""
@@ -85,6 +86,7 @@ def generate_launch_description():
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("map"),
         DeclareLaunchArgument("config_file", default_value=str(share / "config/tactics.yaml")),
+        DeclareLaunchArgument("own_team", default_value=""),
         DeclareLaunchArgument("params_file", default_value=str(share / "config/nav2.yaml")),
         DeclareLaunchArgument("controller_overlay", default_value=""),
         OpaqueFunction(function=_nodes),

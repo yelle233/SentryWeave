@@ -12,6 +12,7 @@ from sentry_interfaces.msg import (
     TaskFeedback, TacticalTask, TeammateIntentArray, ThreatState, WorldState,
 )
 
+from sentry_core.inputs import view_inputs
 from sentry_core.learned import IntentModel, load_utility
 from sentry_core.model import IntentType, Phase
 from sentry_core.policy import DecisionEngine
@@ -72,9 +73,9 @@ class DecisionNode(Node):
             return
         self.world = world
         bases = [z for z in self.config.zones if z.intent == IntentType.DEFEND_BASE]
-        critical = (world.self_track is None or world.referee is None
-                    or world.referee.phase != Phase.RUNNING
-                    or world.referee.hp is not None and world.referee.hp < self.config.critical_hp
+        info = view_inputs(world, self.config)
+        critical = (world.self_track is None or info.phase != Phase.RUNNING
+                    or info.self_hp is not None and info.self_hp < self.config.critical_hp
                     or any(t.usable and t.position.distance(z.center) <= z.radius
                            for t in world.enemies for z in bases))
         if critical != self.last_critical:

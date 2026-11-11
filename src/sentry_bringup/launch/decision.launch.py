@@ -12,12 +12,15 @@ def generate_launch_description():
     share = Path(get_package_share_directory("sentry_bringup"))
     ns, sim = LaunchConfiguration("namespace"), LaunchConfiguration("use_sim_time")
     config = LaunchConfiguration("config_file")
-    common = {"config_file": config, "use_sim_time": ParameterValue(sim, value_type=bool)}
+    common = {"config_file": config, "own_team": LaunchConfiguration("own_team"),
+              "use_sim_time": ParameterValue(sim, value_type=bool)}
     tf = [("/tf", "tf"), ("/tf_static", "tf_static")]
     return LaunchDescription([
         DeclareLaunchArgument("namespace", default_value="sentry"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("config_file", default_value=str(share / "config/tactics.yaml")),
+        DeclareLaunchArgument("own_team", default_value="",
+                              description="RED or BLUE; empty uses own_team from config_file"),
         DeclareLaunchArgument("intent_model", default_value=""),
         DeclareLaunchArgument("utility_model", default_value=""),
         DeclareLaunchArgument("rl_model", default_value=""),

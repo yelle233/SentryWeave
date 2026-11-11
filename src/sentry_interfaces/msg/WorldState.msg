@@ -8,3 +8,7 @@ RobotTrack[<=32] enemies
 RefereeState referee
 bool referee_valid
 string mode
+GameStatus game
+bool game_valid
+RobotStatus[<=64] robots
+StructureState[<=16] structures

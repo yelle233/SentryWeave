@@ -15,6 +15,8 @@ def generate_launch_description():
         DeclareLaunchArgument("namespace", default_value="sentry"),
         DeclareLaunchArgument("map", description="Surveyed occupancy map YAML"),
         DeclareLaunchArgument("config_file", description="Calibrated season tactics YAML"),
+        DeclareLaunchArgument("own_team", default_value="",
+                              description="RED or BLUE; empty uses own_team from config_file"),
         DeclareLaunchArgument("params_file", default_value=str(share / "config/nav2.yaml")),
         DeclareLaunchArgument("controller_overlay", default_value=str(share / "config/omni_overlay.yaml")),
         DeclareLaunchArgument("intent_model", default_value=""),
@@ -26,7 +28,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(share / "launch/navigation.launch.py")),
             launch_arguments={"namespace": ns, "use_sim_time": "false",
-                              "config_file": config,
+                              "config_file": config, "own_team": LaunchConfiguration("own_team"),
                               "map": LaunchConfiguration("map"),
                               "params_file": LaunchConfiguration("params_file"),
                               "controller_overlay": LaunchConfiguration("controller_overlay")}.items(),
@@ -34,6 +36,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(share / "launch/decision.launch.py")),
             launch_arguments={"namespace": ns, "config_file": config, "use_sim_time": "false",
+                              "own_team": LaunchConfiguration("own_team"),
                               "self_from_tf": "true", "require_localization_health": "true",
                               "intent_model": LaunchConfiguration("intent_model"),
                               "utility_model": LaunchConfiguration("utility_model"),
