@@ -4,6 +4,9 @@ from dataclasses import replace
 import math
 import uuid
 
+from .candidates import (
+    MIN_INTERCEPT_THREAT, SUBGOAL_ID, TRAVEL_SCALE, Goal, GoalGenerator, utility,
+)
 from .config import Config, validate_config
 from .geometry import TacticalMap
 from .inputs import view_inputs
@@ -40,6 +43,7 @@ class DecisionEngine:
         self.config = validate_config(config)
         self.arena = TacticalMap(config)
         self.estimator = IntentEstimator(config, self.arena, model)
+        self.generator = GoalGenerator(self.config, self.arena)
         self.session_id = session_id or uuid.uuid4().hex
         self.baseline, self.hysteresis = baseline, hysteresis
         self.goal_prior = goal_prior
@@ -103,7 +107,6 @@ class DecisionEngine:
             return [hold], [unsafe]
         info, own = view_inputs(world, config), world.self_track
         own_hp, own_ammo = info.self_hp, info.self_ammo
-        hp = own_hp if own_hp is not None else 0.5
         can_supply = config.supply_enabled and info.supply_available is True
         need_supply = ((own_hp is not None and own_hp < config.critical_hp)
                        or (own_ammo is not None and own_ammo < 0.1))
@@ -111,83 +114,108 @@ class DecisionEngine:
             self._recovering = False
         self._recovering = can_supply and (need_supply or self._recovering)
         results, rejected = [hold], []
-        zones = {z.name: z for z in config.zones}
-        threat_by_zone = {t.zone_id: t for t in threats}
         allies = {t.robot_id: t for t in world.allies if t.usable}
-        for point in config.points:
-            if self._cooldowns.get(point.name, 0) > world.stamp:
-                rejected.append(f"{point.name}:FAILURE_COOLDOWN")
+        goals = self.generator.generate(world, intents, threats, preferred_only=self.baseline)
+        lengths = self.arena.distances(own.position, [g.position for g in goals])
+        own_region = self.arena.component(own.position)
+        context = {"info": info, "intents": intents, "allies": allies, "can_supply": can_supply,
+                   "threats": {t.zone_id: t for t in threats}}
+        for goal, path_length in zip(goals, lengths):
+            if self._cooldowns.get(goal.goal_id, 0) > world.stamp:
+                rejected.append(f"{goal.goal_id}:FAILURE_COOLDOWN")
                 continue
-            path_length = self.arena.distance(own.position, point.position)
-            if not math.isfinite(path_length):
-                rejected.append(f"{point.name}:UNREACHABLE")
+            if not math.isfinite(path_length) or (
+                    goal.source == "preferred"
+                    and self.arena.component(goal.position) != own_region):
+                rejected.append(f"{goal.goal_id}:UNREACHABLE")
                 continue
-            clearance = min((t.position.distance(point.position) for t in allies.values()),
+            clearance = min((t.position.distance(goal.position) for t in allies.values()),
                             default=10.)
             if clearance < config.ally_clearance:
-                rejected.append(f"{point.name}:ALLY_OCCUPIED")
+                rejected.append(f"{goal.goal_id}:ALLY_OCCUPIED")
                 continue
-            zone = zones[point.zone]
-            threat = threat_by_zone.get(point.zone, Threat(point.zone, 0., None, None))
-            coverage = sum(zone.contains(t.position) for t in allies.values())
-            for kind in point.tasks:
-                target = None
-                confidence, urgent = 1.0, False
-                value, cooperation, urgency, risk = 0., 0., 0., (1 - hp) * 0.3
-                reason = ""
-                if kind == TaskType.DEFEND:
-                    value = 0.42 + (0.12 if info.structures["own_outpost"] is False else 0.)
-                    cooperation = 0.18 / (1 + coverage)
-                    urgency, reason = 0.15 + 0.8 * threat.score, "AREA_UNCOVERED"
-                elif kind == TaskType.INTERCEPT:
-                    if self.baseline or threat.score < 0.18 or hp < config.critical_hp:
-                        continue
-                    value, cooperation = zone.importance, 1 / (1 + coverage)
-                    urgency, target = threat.score, threat.enemy_id
-                    confidence = threat.score
-                    urgent = threat.score >= config.urgent_threat
-                    risk += 0.12
-                    reason = "BASE_THREAT"
-                elif kind == TaskType.SUPPORT:
-                    if own_hp is None or hp < 0.35 or own_ammo is None or own_ammo < 0.1:
-                        rejected.append(f"{point.name}:RESOURCES_UNCERTAIN_OR_LOW")
-                        continue
-                    if (zone.intent == IntentType.ATTACK_OUTPOST
-                            and info.structures["enemy_outpost"] is not True):
-                        rejected.append(f"{point.name}:OUTPOST_NOT_CONFIRMED_ALIVE")
-                        continue
-                    supporting = [i for i in intents if i.valid and i.zone_id == zone.name
-                                  and i.robot_id in allies]
-                    if self.baseline and zone.intent == IntentType.ATTACK_OUTPOST:
-                        confidence, cooperation = 1., 0.7
-                    elif supporting:
-                        intent = max(supporting, key=lambda i: i.confidence)
-                        target, confidence = intent.robot_id, intent.confidence
-                        cooperation = confidence * min(1., clearance / 3.)
-                    else:
-                        continue
-                    value, urgency, risk = zone.importance, 0.5, risk + 0.1
-                    reason = "TEAM_SUPPORT_HIGH" if not self.baseline else "FIXED_OUTPOST_RULE"
-                elif kind == TaskType.RECOVER:
-                    if not can_supply or not (self._recovering
-                                              or (own_hp is not None and own_hp < 0.6)
-                                              or (own_ammo is not None and own_ammo < 0.2)):
-                        continue
-                    value, cooperation = 0.8, 0.4
-                    urgency = max(1 - hp, 1 - (own_ammo if own_ammo is not None else 1))
-                    urgent, reason = self._recovering, "LOW_RESOURCES"
-                key = kind, point.zone, target, point.name
-                switching = float(self.current is not None and self.current.key != key)
-                features = (value, cooperation, urgency, min(1., risk),
-                            min(1., path_length / 25.), switching)
-                desirability = (*features[:3], *(1 - x for x in features[3:]))
-                utility = sum(w * f for w, f in zip(config.weights, desirability))
-                results.append(Candidate(kind, point.zone, target, point.name, point.position,
-                                         point.yaw, features, utility, confidence, urgent, reason))
+            candidate = self._score(goal, path_length, clearance, context, rejected)
+            if candidate is not None:
+                results.append(candidate)
         # Resource recovery is a hard team-configured survival constraint, not a model weight.
         if self._recovering:
             results = [c for c in results if c.kind in (TaskType.HOLD, TaskType.RECOVER)]
         return results, rejected
+
+    def _score(self, goal: Goal, path_length, clearance, context, rejected):
+        config, info = self.config, context["info"]
+        zone = next(z for z in config.zones if z.name == goal.zone_id)
+        threat = context["threats"].get(zone.name, Threat(zone.name, 0., None, None))
+        allies = context["allies"]
+        coverage = sum(zone.contains(t.position) for t in allies.values())
+        own_hp, own_ammo = info.self_hp, info.self_ammo
+        hp = own_hp if own_hp is not None else 0.5
+        target, confidence, urgent, reason = None, 1.0, False, ""
+        value, cooperation, urgency, risk = 0., 0., 0., (1 - hp) * 0.3
+        kind = goal.kind
+        if kind == TaskType.DEFEND:
+            value = 0.42 + (0.12 if info.structures["own_outpost"] is False else 0.)
+            cooperation = 0.18 / (1 + coverage)
+            urgency, reason = 0.15 + 0.8 * threat.score, "AREA_UNCOVERED"
+        elif kind == TaskType.INTERCEPT:
+            if self.baseline or threat.score < MIN_INTERCEPT_THREAT or hp < config.critical_hp:
+                return None
+            value, cooperation = zone.importance, 1 / (1 + coverage)
+            urgency, target, confidence = threat.score, threat.enemy_id, threat.score
+            urgent = threat.score >= config.urgent_threat
+            risk += 0.12
+            reason = "BASE_THREAT"
+        elif kind == TaskType.SUPPORT:
+            if own_hp is None or hp < 0.35 or own_ammo is None or own_ammo < 0.1:
+                rejected.append(f"{goal.goal_id}:RESOURCES_UNCERTAIN_OR_LOW")
+                return None
+            if (zone.intent == IntentType.ATTACK_OUTPOST
+                    and info.structures.get(zone.structure or "enemy_outpost") is not True):
+                rejected.append(f"{goal.goal_id}:OUTPOST_NOT_CONFIRMED_ALIVE")
+                return None
+            supporting = [i for i in context["intents"] if i.valid and i.zone_id == zone.name
+                          and i.robot_id in allies
+                          and (goal.target_id is None or i.robot_id == goal.target_id)]
+            if self.baseline and zone.intent == IntentType.ATTACK_OUTPOST:
+                confidence, cooperation = 1., 0.7
+            elif supporting:
+                intent = max(supporting, key=lambda i: i.confidence)
+                target, confidence = intent.robot_id, intent.confidence
+                cooperation = confidence * min(1., clearance / 3.)
+            else:
+                return None
+            value, urgency, risk = zone.importance, 0.5, risk + 0.1
+            reason = "TEAM_SUPPORT_HIGH" if not self.baseline else "FIXED_OUTPOST_RULE"
+        elif kind == TaskType.RECOVER:
+            if not context["can_supply"] or not (
+                    self._recovering or (own_hp is not None and own_hp < 0.6)
+                    or (own_ammo is not None and own_ammo < 0.2)):
+                return None
+            value, cooperation = 0.8, 0.4
+            urgency = max(1 - hp, 1 - (own_ammo if own_ammo is not None else 1))
+            urgent, reason = self._recovering, "LOW_RESOURCES"
+        key = kind, zone.name, target, goal.goal_id
+        switching = float(self.current is not None and self.current.key != key)
+        features = (value, cooperation, urgency, min(1., risk),
+                    min(1., path_length / TRAVEL_SCALE), switching)
+        return Candidate(kind, zone.name, target, goal.goal_id, goal.position, goal.yaw, features,
+                         utility(features, config.weights), confidence, urgent, reason)
+
+    def _screen_subgoal(self, world, candidates, rejected):
+        """A model sub-goal still obeys failure cooldowns and teammate clearance."""
+        allies = [t for t in world.allies if t.usable]
+        kept = []
+        for candidate in candidates:
+            if candidate.goal_id == SUBGOAL_ID:
+                if self._cooldowns.get(SUBGOAL_ID, 0) > world.stamp:
+                    rejected.append(f"{SUBGOAL_ID}:FAILURE_COOLDOWN")
+                    continue
+                if any(t.position.distance(candidate.goal) < self.config.ally_clearance
+                       for t in allies):
+                    rejected.append(f"{SUBGOAL_ID}:ALLY_OCCUPIED")
+                    continue
+            kept.append(candidate)
+        return kept
 
     def _select(self, candidates, now):
         current = next((c for c in candidates if self.current and c.key == self.current.key), None)
@@ -238,9 +266,16 @@ class DecisionEngine:
         threats = self._threats(world)
         candidates, rejected = self._candidates(world, intents, threats)
         if self.goal_prior:
-            candidates = self.goal_prior.rank(world, candidates, self.arena)
+            candidates = self.goal_prior.rank(world, candidates, self.arena,
+                                              self.current.key if self.current else None)
+            candidates = self._screen_subgoal(world, candidates, rejected)
         chosen, arbitration = self._select(candidates, world.stamp)
-        if self.current is None or self.current.key != chosen.key:
+        moved = (self.current is not None and self.current.key == chosen.key
+                 and chosen.goal is not None and self.current.goal is not None
+                 and chosen.goal.distance(self.current.goal) > self.config.goal_update_distance)
+        if moved:
+            arbitration = "GOAL_MOVED"
+        if self.current is None or self.current.key != chosen.key or moved:
             self._next_id += 1
             self.current = Task(
                 self.session_id, self._next_id, world.seq, world.stamp,

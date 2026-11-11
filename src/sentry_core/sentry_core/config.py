@@ -103,6 +103,14 @@ class Config:
     mirror: str = "none"
     mirrored: bool = False
     mirror_tolerance: float = 0.05
+    intercept_distance: float = 2.0
+    defense_radius: float = 2.0
+    defense_spread: float = 0.6
+    support_back: float = 1.5
+    support_side: float = 1.0
+    support_standoff: float = 3.0
+    contest_samples: int = 4
+    goal_update_distance: float = 1.5
 
     def structure(self, name: str) -> Structure | None:
         return next((s for s in self.structures if s.name == name), None)
@@ -130,7 +138,8 @@ def validate_config(config: Config) -> Config:
     for name in ("robot_radius", "observed_age", "predicted_age", "self_timeout",
                  "referee_timeout", "retention", "max_speed", "history_sec", "cooldown",
                  "task_lease", "nominal_speed", "ally_clearance", "game_timeout",
-                 "robot_status_timeout", "structure_timeout"):
+                 "robot_status_timeout", "structure_timeout", "intercept_distance",
+                 "defense_radius", "support_back", "support_standoff", "goal_update_distance"):
         if not math.isfinite(getattr(config, name)) or getattr(config, name) <= 0:
             raise ValueError(f"{name} must be finite and positive")
     if not config.observed_age < config.predicted_age < config.retention:
@@ -144,8 +153,12 @@ def validate_config(config: Config) -> Config:
             raise ValueError(f"invalid {name}")
     if config.critical_hp >= config.recovered_hp:
         raise ValueError("critical_hp must be below recovered_hp")
-    if config.confirm_cycles < 1 or config.max_tracks < 1:
+    if (config.confirm_cycles < 1 or config.max_tracks < 1
+            or not 0 <= config.contest_samples <= 16):
         raise ValueError("invalid positive count")
+    if (not math.isfinite(config.defense_spread) or not 0 <= config.defense_spread <= math.pi
+            or not math.isfinite(config.support_side) or config.support_side < 0):
+        raise ValueError("defense_spread must be in [0, pi] and support_side nonnegative")
     names = {z.name for z in config.zones}
     if len(names) != len(config.zones) or not names:
         raise ValueError("zone names must be unique and nonempty")

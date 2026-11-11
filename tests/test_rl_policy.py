@@ -23,7 +23,9 @@ def actor_file(tmp_path, action=(0.4, 0.), width=20., height=12.):
     return path
 
 
-def test_rl_changes_scores_without_adding_or_moving_legal_candidates(config, world_factory, tmp_path):
+def test_rl_rescores_rule_candidates_and_adds_one_projected_legal_subgoal(config, world_factory,
+                                                                          tmp_path):
+    from sentry_core.geometry import TacticalMap
     from sentry_core.policy import DecisionEngine
     from sentry_core.rl_policy import GoalPrior
 
@@ -31,10 +33,15 @@ def test_rl_changes_scores_without_adding_or_moving_legal_candidates(config, wor
     baseline = DecisionEngine(config).step(world)
     prior = GoalPrior.load(actor_file(tmp_path), config, blend=1.)
     learned = DecisionEngine(config, goal_prior=prior).step(world)
-    assert {c.key: c.goal for c in baseline.candidates} == {c.key: c.goal for c in learned.candidates}
+    rule = {c.key: c.goal for c in learned.candidates if c.goal_id != "rl_subgoal"}
+    assert {c.key: c.goal for c in baseline.candidates} == rule
     assert any(a.utility != b.utility for a, b in zip(baseline.candidates, learned.candidates))
+    subgoals = [c for c in learned.candidates if c.goal_id == "rl_subgoal"]
+    arena = TacticalMap(config)
+    assert len(subgoals) == 1
+    assert arena.reachable(world.self_track.position, subgoals[0].goal)
     assert learned.policy_info["used"]
-    assert learned.task.goal in [c.goal for c in baseline.candidates]
+    assert learned.task.goal in [*rule.values(), subgoals[0].goal]
 
 
 def test_rl_cannot_override_resource_or_localization_guards(config, world_factory, tmp_path):
@@ -157,4 +164,4 @@ def test_reach_limit_applies_to_both_proposal_and_candidate_waypoints(config, wo
     late = engine.step(world_factory(now=14.5, allies=((1, 14, 4, 1.4, 0.4),)))
     # The suggestion is 14 m away but only 0.75 m of this macro remains reachable.
     # Both sides of the comparison must use that distance, not just the candidates.
-    assert max(c.learned_utility or 0. for c in late.candidates) > 0.5
+    assert max(c.learned_utility or 0. for c in late.candidates if c.goal_id != "rl_subgoal") > 0.5

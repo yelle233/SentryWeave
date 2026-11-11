@@ -7,6 +7,7 @@ import hashlib
 
 import numpy as np
 
+from .candidates import SUBGOAL_ID, TRAVEL_SCALE, utility
 from .inputs import view_inputs
 from .model import TaskType, Vec2
 from .navigation_features import FEATURE_NAMES, FEATURE_VERSION, NavigationSpec, encode_world
@@ -139,11 +140,17 @@ class NumpyNavigationPolicy:
         return output
 
 
-class GoalPrior:
-    """Rank already-feasible goals using an offline-trained navigation proposal.
+SUBGOAL_KINDS = (TaskType.SUPPORT, TaskType.DEFEND)
 
-    The model never creates candidate poses, changes urgency, or bypasses rule
-    filters. DT context records observed past displacement, not unexecuted plans.
+
+class GoalPrior:
+    """Rank feasible goals with an offline-trained navigation proposal.
+
+    The proposal is projected onto the nearest legal, reachable position. That
+    projected sub-goal is offered as one extra candidate that inherits the task of
+    the best non-urgent SUPPORT/DEFEND rule candidate; the model never changes
+    urgency, moves rule candidates, or bypasses rule filters. DT context records
+    observed past displacement, not unexecuted plans.
     """
 
     def __init__(self, model, config, blend=0.25, mirror=None, allow_transfer=False):
@@ -224,7 +231,7 @@ class GoalPrior:
                         else "OUT_OF_FIELD")
         self.last_update, self.generation = world.stamp, own.generation
 
-    def rank(self, world, candidates, arena):
+    def rank(self, world, candidates, arena, current_key=None):
         self.info = {
             "algorithm": self.model.payload["algorithm"], "model_id": self.model_id,
             "dataset_id": self.model.payload.get("provenance", {}).get("dataset_id"),
@@ -266,16 +273,39 @@ class GoalPrior:
         radius = max(0.5, 0.5 * travel)
         comparison_goal = Vec2(own.x + remaining.x * travel / remaining.norm,
                                own.y + remaining.y * travel / remaining.norm)
-        self.info["projection_distance_m"] = travel
-        ranked = []
-        for candidate in candidates:
-            if candidate.kind == TaskType.HOLD or candidate.goal is None:
-                ranked.append(candidate)
-                continue
-            waypoint = arena.advance(world.self_track.position, candidate.goal, travel)
-            score = math.exp(-0.5 * (waypoint.distance(comparison_goal) / radius) ** 2)
-            ranked.append(replace(candidate,
-                                  utility=(1 - self.blend) * candidate.utility + self.blend * score,
-                                  rule_utility=candidate.utility, learned_utility=score))
+        projected = arena.nearest_legal(comparison_goal, anchor=own)
+        if projected is None:
+            self.info["status"] = "NO_LEGAL_PROJECTION"
+            return candidates
+        self.info.update(projection_distance_m=travel, projected_goal=[projected.x, projected.y])
+
+        def blended(candidate):
+            waypoint = arena.advance_from(own, candidate.goal, travel)
+            score = math.exp(-0.5 * (waypoint.distance(projected) / radius) ** 2)
+            return replace(candidate, utility=(1 - self.blend) * candidate.utility + self.blend * score,
+                           rule_utility=candidate.utility, learned_utility=score)
+
+        ranked = [c if c.kind == TaskType.HOLD or c.goal is None else blended(c) for c in candidates]
+        subgoal = self._subgoal(own, candidates, arena, projected, current_key)
+        if subgoal is not None:
+            ranked.append(blended(subgoal))
+            self.info["subgoal"] = [projected.x, projected.y]
         self.info["used"] = True
         return ranked
+
+    def _subgoal(self, own, candidates, arena, projected, current_key):
+        if any(c.urgent for c in candidates):
+            return None
+        pool = [c for c in candidates if c.kind in SUBGOAL_KINDS and c.goal is not None]
+        if not pool:
+            return None
+        base = max(pool, key=lambda c: (c.utility, c.goal_id))
+        length = arena.distances(own, [projected])[0]
+        if not math.isfinite(length):
+            return None
+        key = base.kind, base.zone_id, base.target_id, SUBGOAL_ID
+        features = (*base.features[:4], min(1., length / TRAVEL_SCALE),
+                    float(current_key is not None and current_key != key))
+        return replace(base, goal_id=SUBGOAL_ID, goal=projected, features=features,
+                       utility=utility(features, self.config.weights),
+                       reason=f"RL_SUBGOAL:{base.reason}")
