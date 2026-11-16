@@ -227,3 +227,47 @@ def test_own_team_parameter_keeps_self_id_derivation(tmp_path):
                 node.destroy_node()
     finally:
         rclpy.shutdown()
+
+
+def test_decision_launch_exposes_executor_guard_and_precheck_switches():
+    import importlib.util
+    from launch import LaunchContext
+    from launch_ros.actions import Node as LaunchNode
+    from sentry_ros.executor_node import ExecutorNode
+    import rclpy
+    from rclpy.parameter import Parameter
+    from conftest import ROOT
+
+    assert launch_argument_default("enable_executor", "decision.launch.py") == "true"
+    assert launch_argument_default("enable_velocity_guard", "decision.launch.py") == "true"
+    assert launch_argument_default("check_path_before_navigate", "decision.launch.py") == "true"
+
+    spec = importlib.util.spec_from_file_location(
+        "decision_launch", ROOT / "src/sentry_bringup/launch/decision.launch.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    description = module.generate_launch_description()
+    nodes = [e for e in description.entities if isinstance(e, LaunchNode)]
+    assert len(nodes) == 4
+
+    def enabled_count(overrides):
+        ctx = LaunchContext()
+        for k, v in {"enable_executor": "true", "enable_velocity_guard": "true",
+                     **overrides}.items():
+            ctx.launch_configurations[k] = v
+        return sum(1 for n in nodes if n.condition is None or n.condition.evaluate(ctx))
+
+    assert enabled_count({}) == 4
+    assert enabled_count({"enable_executor": "false"}) == 3
+    assert enabled_count({"enable_executor": "false", "enable_velocity_guard": "false"}) == 2
+
+    rclpy.init()
+    try:
+        node = ExecutorNode(parameter_overrides=[
+            Parameter("check_path_before_navigate", value=False)])
+        try:
+            assert node.machine.check_path_before_navigate is False
+        finally:
+            node.destroy_node()
+    finally:
+        rclpy.shutdown()

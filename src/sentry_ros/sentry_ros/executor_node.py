@@ -29,7 +29,9 @@ class ExecutorNode(Node):
         self.config = read_config(self)
         self.arena = TacticalMap(self.config)
         timeout = self.declare_parameter("action_timeout", 2.0).value
-        self.machine = Executor(self.arena, action_timeout=timeout)
+        precheck = self.declare_parameter("check_path_before_navigate", True).value
+        self.machine = Executor(self.arena, action_timeout=timeout,
+                                check_path_before_navigate=precheck)
         self.planner_id = self.declare_parameter("planner_id", "GridBased").value
         self.nav = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.planner = ActionClient(self, ComputePathToPose, "compute_path_to_pose")

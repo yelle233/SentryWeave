@@ -23,11 +23,13 @@ class Command:
 
 class Executor:
     def __init__(self, arena: TacticalMap, action_timeout: float = 2.0,
-                 safety_timeout: float = 0.75):
+                 safety_timeout: float = 0.75,
+                 check_path_before_navigate: bool = True):
         if not all(math.isfinite(v) and v > 0 for v in (action_timeout, safety_timeout)):
             raise ValueError("executor timeouts must be positive")
         self.arena = arena
         self.action_timeout, self.safety_timeout = action_timeout, safety_timeout
+        self.check_path_before_navigate = bool(check_path_before_navigate)
         self.state = "IDLE"
         self.reason = ""
         self.desired: Task | None = None
@@ -142,6 +144,12 @@ class Executor:
             self._emit("FEEDBACK", "IDLE", task.reason or "HOLD")
             return
         self.token += 1
+        if not self.check_path_before_navigate:
+            self.state = "SENDING"
+            self._pending_navigation = True
+            self._deadline = steady + self.action_timeout
+            self._emit("SEND")
+            return
         self.state = "PLANNING"
         self._deadline = steady + self.action_timeout
         self._emit("PLAN")

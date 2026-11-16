@@ -3,6 +3,7 @@ from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -34,6 +35,13 @@ def generate_launch_description():
         DeclareLaunchArgument("base_frame", default_value="base_link"),
         DeclareLaunchArgument("self_from_tf", default_value="true"),
         DeclareLaunchArgument("require_localization_health", default_value="false"),
+        DeclareLaunchArgument("enable_executor", default_value="true",
+                              description="Start the Nav2 NavigateToPose executor node"),
+        DeclareLaunchArgument("enable_velocity_guard", default_value="true",
+                              description="Start the nav_cmd_vel -> cmd_vel watchdog gate"),
+        DeclareLaunchArgument(
+            "check_path_before_navigate", default_value="true",
+            description="Run ComputePathToPose legality check before NavigateToPose"),
         Node(package="sentry_ros", executable="world_model", namespace=ns, output="screen",
              remappings=tf, parameters=[common, {
                  "base_frame": LaunchConfiguration("base_frame"),
@@ -52,7 +60,12 @@ def generate_launch_description():
                  "trace_path": LaunchConfiguration("trace_path"),
              }]),
         Node(package="sentry_ros", executable="executor", namespace=ns, output="screen",
-             parameters=[common]),
+             condition=IfCondition(LaunchConfiguration("enable_executor")),
+             parameters=[common, {
+                 "check_path_before_navigate": ParameterValue(
+                     LaunchConfiguration("check_path_before_navigate"), value_type=bool),
+             }]),
         Node(package="sentry_ros", executable="velocity_guard", namespace=ns, output="screen",
+             condition=IfCondition(LaunchConfiguration("enable_velocity_guard")),
              parameters=[{"use_sim_time": ParameterValue(sim, value_type=bool)}]),
     ])

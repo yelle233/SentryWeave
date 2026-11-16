@@ -219,3 +219,31 @@ def test_new_task_survives_temporary_interlock_while_old_goal_cancels(rig):
     executor.safety(True, 10.4, 100.4)
     executor.tick(10.4, 100.4)
     assert any(c.kind == "PLAN" and c.task.task_id == 2 for c in executor.drain())
+
+
+def test_executor_can_skip_path_precheck_while_keeping_goal_legality(config):
+    from sentry_core.execution import Executor
+    from sentry_core.geometry import TacticalMap
+    from sentry_core.model import Task, TaskType, Vec2
+
+    arena = TacticalMap(config)
+    goal = config.points[0].position
+    machine = Executor(arena, check_path_before_navigate=False)
+    machine.safety(True, 10.0, 100.0)
+    legal_task = Task("s1", 1, 1, 10.0, 12.0, TaskType.DEFEND, config.points[0].zone,
+                      None, "p0", goal, 0.0, 0.7, 0.9, False, "AREA_UNCOVERED")
+    machine.submit(legal_task, 10.0, 100.0)
+    kinds = [c.kind for c in machine.drain()]
+    assert kinds == ["FEEDBACK", "SEND"]
+    assert machine.state == "SENDING"
+    machine.accepted(machine.token, True, 10.1, 100.1)
+    assert machine.state == "RUNNING" and machine.motion_allowed(10.1, 100.1)
+
+    # Illegal goals inside obstacles or outside bounds are still rejected immediately.
+    illegal_machine = Executor(arena, check_path_before_navigate=False)
+    illegal_machine.safety(True, 10.0, 100.0)
+    bad = Task("s1", 2, 1, 10.0, 12.0, TaskType.DEFEND, config.points[0].zone,
+               None, "bad", Vec2(-1.0, -1.0), 0.0, 0.7, 0.9, False, "AREA_UNCOVERED")
+    illegal_machine.submit(bad, 10.0, 100.0)
+    commands = illegal_machine.drain()
+    assert [(c.kind, c.state) for c in commands] == [("FEEDBACK", "REJECTED")]
