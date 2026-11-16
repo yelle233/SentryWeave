@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-11-16",
+  "onboard_dependencies": ["numpy", "PyYAML"],
+  "requires_gpu_or_torch": false,
+  "models": {
+    "bc_iql": {
+      "label_zh": "BC / IQL (MLP 73→128→128→2)",
+      "label_en": "BC / IQL (MLP 128x2)",
+      "p_core_us": 5.9,
+      "e_core_us": 16.7,
+      "artifact_kib": 535.0
+    },
+    "dt": {
+      "label_zh": "Decision Transformer (ctx=8, 2层)",
+      "label_en": "Decision Transformer (ctx=8)",
+      "p_core_us": 290.0,
+      "e_core_us": 730.0,
+      "artifact_kib": 2867.2
+    }
+  },
+  "ros_decision_node_2hz": {
+    "rate_hz": 2.0,
+    "single_core_cpu_pct_low": 3.2,
+    "single_core_cpu_pct_high": 3.7,
+    "rss_mib_low": 72.0,
+    "rss_mib_high": 80.0,
+    "includes": "rclpy timer + WorldState deserialization + DecisionEngine.step + JSONL trace"
+  },
+  "notes": "Model timings are pure NumPy float32 single-step forward passes (NumpyNavigationPolicy.predict) without PyTorch or CUDA. ROS node footprint is measured on ROS 2 Jazzy at 2 Hz."
+}

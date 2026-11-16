@@ -21,7 +21,7 @@ Documentation = "https://github.com/yelle233/SentryWeave/tree/main/docs"
 Issues = "https://github.com/yelle233/SentryWeave/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "ruff>=0.9"]
+dev = ["pytest>=8,<9", "ruff>=0.9", "Pillow>=10,<13"]
 rl = ["torch>=2.7,<3", "safetensors>=0.5,<1", "py7zr>=1,<2"]
 
 [project.scripts]
