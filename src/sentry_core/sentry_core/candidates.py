@@ -63,10 +63,12 @@ class GoalGenerator:
                  for p in self.config.points for kind in p.tasks]
         if preferred_only and goals:
             return goals
-        own = world.self_track.position
+        origin = self.arena.origin(world.self_track.position) if world.self_track else None
+        if origin is None:
+            return [g for g in goals if self.arena.legal(g.position)]
         for goal in (*self._defense(world, threats), *self._support(world, intents),
                      *self._areas()):
-            position = self.arena.nearest_legal(goal.position, anchor=own)
+            position = self.arena.nearest_legal(goal.position, anchor=origin)
             if position is None or (goal.source == "contest"
                                     and not self.zones[goal.zone_id].contains(position)
                                     and position.distance(goal.position) > 1.0):

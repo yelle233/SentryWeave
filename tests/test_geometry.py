@@ -173,3 +173,39 @@ def test_keepout_mask_rasterizes_polygon_keepouts(config, tmp_path):
     assert cell(16, 2) == 0
     assert cell(14.2, 3.5) == 254
     assert cell(3, 3) == 254
+
+
+def test_observed_origins_and_zone_queries_snap_obstacle_margins_but_reject_out_of_bounds(config):
+    from dataclasses import replace
+    from sentry_core.geometry import TacticalMap
+    from sentry_core.model import Vec2
+
+    arena = TacticalMap(config)
+    open_pose = Vec2(7.0, 6.0)
+    margin_pose = Vec2(8.8, 6.0)  # 0.2 m from [9, 4.5, 11, 7.5], inside 0.32 m robot_radius
+    wall_margin = Vec2(0.15, 6.0)
+    assert arena.in_bounds(open_pose) and arena.legal(open_pose)
+    assert arena.origin(open_pose) == open_pose
+    for pose in (margin_pose, wall_margin):
+        assert arena.in_bounds(pose) and not arena.legal(pose)
+        snapped = arena.origin(pose)
+        assert snapped is not None and arena.legal(snapped) and arena.component(snapped) >= 0
+        assert snapped.distance(pose) < 0.4
+    for invalid in (Vec2(-0.5, 6.0), Vec2(20.5, 6.0), Vec2(5.0, -0.1), Vec2(5.0, 12.1),
+                    Vec2(float("nan"), 6.0), Vec2(5.0, float("inf"))):
+        assert not arena.in_bounds(invalid)
+        assert arena.origin(invalid) is None
+    blocked_all = TacticalMap(replace(config, obstacles=((0.0, 0.0, 20.0, 12.0),), points=()))
+    assert blocked_all.origin(Vec2(5.0, 6.0)) is None
+
+    outpost = next(z for z in config.zones if z.name == "enemy_outpost")
+    assert arena.zone_route(margin_pose, outpost) == ()
+    assert math.isinf(arena.zone_distance(margin_pose, outpost))
+    observed_route = arena.observed_zone_route(margin_pose, outpost)
+    observed_dist = arena.observed_zone_distance(margin_pose, outpost)
+    snapped = arena.origin(margin_pose)
+    assert observed_route == arena.zone_route(snapped, outpost) and len(observed_route) >= 2
+    assert observed_dist == pytest.approx(
+        margin_pose.distance(snapped) + arena.zone_distance(snapped, outpost))
+    assert arena.observed_zone_route(Vec2(-0.5, 6.0), outpost) == ()
+    assert math.isinf(arena.observed_zone_distance(Vec2(-0.5, 6.0), outpost))

@@ -45,8 +45,8 @@ class IntentEstimator:
             for zone in self.config.zones:
                 if zone.intent != role:
                     continue
-                path = self.arena.zone_route(track.position, zone)
-                distance = self.arena.zone_distance(track.position, zone)
+                path = self.arena.observed_zone_route(track.position, zone)
+                distance = self.arena.observed_zone_distance(track.position, zone)
                 if not path:
                     options.append((0.5, 0.5, 0.0, 0.0, 0.0))
                     continue
@@ -57,7 +57,7 @@ class IntentEstimator:
                              if denom > 1e-6 and track.velocity.norm > 0.15 else 0.5)
                 progress = 0.5
                 if span > 0.1:
-                    old = self.arena.zone_distance(track.history[0].position, zone)
+                    old = self.arena.observed_zone_distance(track.history[0].position, zone)
                     if math.isfinite(old):
                         progress = np.clip(
                             0.5 + (old - distance) / (2 * self.config.nominal_speed * span),
@@ -114,7 +114,7 @@ class IntentEstimator:
             confidence = track.confidence * max(0., (first - second) / (1 - second + 1e-9))
             valid = bool(kind in ROLES and confidence >= self.config.intent_threshold)
             zones = [z for z in self.config.zones if z.intent == kind]
-            zone = min(zones, key=lambda z: self.arena.zone_distance(track.position, z),
+            zone = min(zones, key=lambda z: self.arena.observed_zone_distance(track.position, z),
                        default=None)
             results.append(Intent(track.robot_id, kind, tuple(float(p) for p in posterior),
                                   float(confidence), zone.name if zone else "", valid, features))

@@ -302,17 +302,22 @@ class GoalPrior:
         # compared to a forced maximum-speed waypoint on every distant route.
         travel = min(remaining.norm, self.config.nominal_speed * max(0.2, self.spec.horizon - age))
         radius = max(0.5, 0.5 * travel)
+        origin = arena.origin(own)
+        if origin is None:
+            self.info["status"] = "NO_LEGAL_PROJECTION"
+            return candidates
         comparison_goal = Vec2(own.x + remaining.x * travel / remaining.norm,
                                own.y + remaining.y * travel / remaining.norm)
-        projected = arena.nearest_legal(comparison_goal, anchor=own)
+        projected = arena.nearest_legal(comparison_goal, anchor=origin)
         if projected is None:
             self.info["status"] = "NO_LEGAL_PROJECTION"
             return candidates
         self.subgoal = projected
         self.info.update(projection_distance_m=travel, projected_goal=[projected.x, projected.y])
+        step = max(0.0, travel - own.distance(origin))
 
         def blended(candidate):
-            waypoint = arena.advance_from(own, candidate.goal, travel)
+            waypoint = arena.advance_from(origin, candidate.goal, step)
             score = math.exp(-0.5 * (waypoint.distance(projected) / radius) ** 2)
             return replace(candidate, utility=(1 - blend) * candidate.utility + blend * score,
                            rule_utility=candidate.utility, learned_utility=score)

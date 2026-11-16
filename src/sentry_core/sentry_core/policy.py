@@ -26,7 +26,7 @@ def safety_reason(world: World, config: Config, arena: TacticalMap) -> str | Non
         return "FRAME_MISMATCH"
     if (track is None or not track.usable
             or not -0.05 <= world.stamp - track.observed_at <= config.self_timeout
-            or not arena.legal(track.position)):
+            or arena.origin(track.position) is None):
         return "LOCALIZATION_INVALID"
     info = view_inputs(world, config)
     if info.phase == Phase.UNKNOWN:
@@ -114,8 +114,8 @@ class DecisionEngine:
                     speed = 0.7
                 else:
                     continue
-                route = self.arena.zone_route(enemy.position, zone)
-                distance = self.arena.zone_distance(enemy.position, zone)
+                route = self.arena.observed_zone_route(enemy.position, zone)
+                distance = self.arena.observed_zone_distance(enemy.position, zone)
                 if not route or weight <= 0:
                     continue
                 eta = max(0., distance - zone.radius) / speed
@@ -166,9 +166,11 @@ class DecisionEngine:
         self._recovering = can_supply and (need_supply or self._recovering)
         results, rejected = [hold], []
         allies = {t.robot_id: t for t in world.allies if t.usable}
+        origin = self.arena.origin(own.position)
+        extra = own.position.distance(origin)
         goals = self.generator.generate(world, intents, threats, preferred_only=self.baseline)
-        lengths = self.arena.distances(own.position, [g.position for g in goals])
-        own_region = self.arena.component(own.position)
+        lengths = [extra + d for d in self.arena.distances(origin, [g.position for g in goals])]
+        own_region = self.arena.component(origin)
         context = {"info": info, "intents": intents, "allies": allies, "can_supply": can_supply,
                    "threats": {t.zone_id: t for t in threats},
                    "completeness": report.completeness}
@@ -301,11 +303,12 @@ class DecisionEngine:
         subgoal, reason = self.goal_prior.subgoal_for(chosen, kept)
         if subgoal is not None:
             zone = next(z for z in self.config.zones if z.name == chosen.zone_id)
+            origin = self.arena.origin(world.self_track.position) if world.self_track else None
             if not (zone.contains(subgoal)
                     or subgoal.distance(chosen.goal) <= self.config.goal_update_distance):
                 subgoal, reason = None, "OUTSIDE_TASK_AREA"
-            elif not math.isfinite(self.arena.distances(world.self_track.position,
-                                                        [subgoal])[0]):
+            elif (origin is None
+                  or not math.isfinite(self.arena.distances(origin, [subgoal])[0])):
                 subgoal, reason = None, "UNREACHABLE"
             elif screened := self._screen_subgoal(world, subgoal, rejected):
                 subgoal, reason = None, screened

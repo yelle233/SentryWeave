@@ -92,6 +92,10 @@ class TacticalMap:
             self._weights[i, i + 1:] = np.where(open_, lengths, np.inf)
         self._weights = np.minimum(self._weights, self._weights.T)
 
+    def in_bounds(self, p: Vec2) -> bool:
+        a, b, c, d = self.config.bounds
+        return p.finite and a <= p.x <= c and b <= p.y <= d
+
     def legal(self, p: Vec2) -> bool:
         a, b, c, d = self.config.bounds
         r = self.config.robot_radius
@@ -258,6 +262,15 @@ class TacticalMap:
         path = self.zone_route(start, zone)
         return sum(a.distance(b) for a, b in zip(path, path[1:])) if path else math.inf
 
+    def observed_zone_route(self, pos: Vec2, zone: Zone) -> tuple[Vec2, ...]:
+        start = self.origin(pos)
+        return self.zone_route(start, zone) if start is not None else ()
+
+    def observed_zone_distance(self, pos: Vec2, zone: Zone) -> float:
+        start = self.origin(pos)
+        return (pos.distance(start) + self.zone_distance(start, zone)
+                if start is not None else math.inf)
+
     @staticmethod
     def _walk(path, distance: float) -> Vec2:
         for a, b in zip(path, path[1:]):
@@ -315,6 +328,20 @@ class TacticalMap:
             return p
         xs, ys, free, labels = self._grid
         ii, jj = np.nonzero(free if label is None else labels == label)
+        if not len(ii):
+            return None
+        k = int(np.argmin((xs[ii] - p.x) ** 2 + (ys[jj] - p.y) ** 2))
+        return Vec2(float(xs[ii[k]]), float(ys[jj[k]]))
+
+    @lru_cache(maxsize=4096)
+    def origin(self, p: Vec2) -> Vec2 | None:
+        """Observed robot start: ``p`` when legal and on the grid, else nearest free cell."""
+        if not self.in_bounds(p):
+            return None
+        if self.legal(p) and self.component(p) >= 0:
+            return p
+        xs, ys, free, _ = self._grid
+        ii, jj = np.nonzero(free)
         if not len(ii):
             return None
         k = int(np.argmin((xs[ii] - p.x) ** 2 + (ys[jj] - p.y) ** 2))
