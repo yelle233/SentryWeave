@@ -328,6 +328,11 @@ class DecisionEngine:
                 chosen, reason = current, "KEEP_CURRENT"
             elif urgent:
                 reason = "URGENT_PREEMPT"
+            elif self.current.kind == TaskType.HOLD and self.current.urgent:
+                # Only a safety reason makes HOLD urgent (_candidates). Once safe, that HOLD
+                # gets no hold time, margin or confirmation: the best task starts at once,
+                # and its own minimum hold with it.
+                reason = "SAFETY_RECOVERED"
             elif not self.hysteresis:
                 reason = "HYSTERESIS_DISABLED"
             elif now - self._held_since < self.config.min_hold:

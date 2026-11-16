@@ -141,3 +141,91 @@ def test_unknown_resource_values_alone_do_not_trigger_recovery(config, world_fac
     assert DecisionEngine(config).step(world).task.kind == TaskType.DEFEND
     world = replace(world, referee=replace(world.referee, ammo=None))
     assert DecisionEngine(config).step(world).task.kind == TaskType.DEFEND
+
+
+@pytest.mark.parametrize("phase, reason", [("UNKNOWN", "GAME_STATE_UNKNOWN"),
+                                           ("READY", "GAME_NOT_RUNNING")])
+def test_match_start_moves_on_the_first_running_cycle(config, world_factory, phase, reason):
+    from sentry_core.model import Phase, TaskType
+    from sentry_core.policy import DecisionEngine
+
+    engine = DecisionEngine(config, session_id="test")
+    hold = engine.step(world_factory(now=10.0, phase=Phase[phase]))
+    assert hold.task.kind == TaskType.HOLD and hold.task.reason == reason
+    start = engine.step(world_factory(now=10.1))
+    assert start.arbitration == "SAFETY_RECOVERED"
+    assert start.task.kind == TaskType.DEFEND and start.task.goal is not None
+    assert start.task.task_id == hold.task.task_id + 1 and start.task.created_at == 10.1
+
+
+@pytest.mark.parametrize("dead_for", [1.0, 10.0])
+def test_respawn_moves_on_the_first_alive_cycle(config, world_factory, dead_for):
+    from sentry_core.model import RobotStatus, Team, TaskType
+    from sentry_core.policy import DecisionEngine
+
+    def world(now, alive):
+        status = RobotStatus(config.self_id, Team.ALLY, now, 400.0 if alive else 0.0, 400.0,
+                             alive, source=1)
+        return replace(world_factory(now=now), robots={config.self_id: status})
+
+    engine = DecisionEngine(config, session_id="test")
+    assert engine.step(world(10.0, True)).task.kind == TaskType.DEFEND
+    dead = [engine.step(world(10.5 + 0.5 * k, False)) for k in range(int(2 * dead_for))]
+    assert all(d.task.kind == TaskType.HOLD and d.task.reason == "ROBOT_DISABLED" for d in dead)
+    alive = engine.step(world(10.5 + dead_for, True))
+    assert alive.arbitration == "SAFETY_RECOVERED"
+    assert alive.task.kind == TaskType.DEFEND and alive.task.goal is not None
+
+
+@pytest.mark.parametrize("reason", ["FRAME_MISMATCH", "LOCALIZATION_INVALID", "GAME_STATE_UNKNOWN",
+                                    "GAME_NOT_RUNNING", "TEAM_MISMATCH", "ROBOT_DISABLED"])
+def test_every_safety_hold_ends_with_the_best_task_at_once(config, world_factory, reason):
+    from sentry_core.model import GameState, Phase, TaskType
+    from sentry_core.policy import DecisionEngine
+
+    unsafe = {
+        "FRAME_MISMATCH": lambda now: replace(world_factory(now=now), frame="odom"),
+        "LOCALIZATION_INVALID": lambda now: replace(world_factory(now=now), self_track=None),
+        "GAME_STATE_UNKNOWN": lambda now: world_factory(now=now, phase=Phase.UNKNOWN),
+        "GAME_NOT_RUNNING": lambda now: world_factory(now=now, phase=Phase.READY),
+        "TEAM_MISMATCH": lambda now: replace(world_factory(now=now), game=GameState(
+            now, own_team="BLUE", phase=Phase.RUNNING)),
+        "ROBOT_DISABLED": lambda now: world_factory(now=now, hp=0.0),
+    }[reason]
+    engine = DecisionEngine(config, session_id="test")
+    assert engine.step(world_factory(now=10.0)).task.kind == TaskType.DEFEND
+    held = engine.step(unsafe(10.5))
+    assert held.task.kind == TaskType.HOLD and held.task.reason == reason
+    safe = world_factory(now=11.0)
+    resumed = engine.step(safe)
+    assert resumed.arbitration == "SAFETY_RECOVERED"
+    assert resumed.task.key == DecisionEngine(config).step(safe).task.key
+    assert resumed.task.task_id == held.task.task_id + 1
+
+
+def test_after_a_safety_hold_real_tasks_keep_hysteresis_and_urgent_preemption(config,
+                                                                              world_factory):
+    from sentry_core.model import Phase, TaskType
+    from sentry_core.policy import DecisionEngine
+
+    engine = DecisionEngine(config, session_id="test")
+    # Held since 5 s: a hold timer counted from the HOLD would already have expired.
+    for now in (5.0, 7.5):
+        engine.step(world_factory(now=now, phase=Phase.READY))
+    start = engine.step(world_factory(now=10.0))
+    assert start.task.kind == TaskType.DEFEND and start.arbitration == "SAFETY_RECOVERED"
+    # The new task's minimum hold starts at 10 s; a better task still needs confirmation.
+    ally = ((1, 14, 4, 1.4, 0.4),)
+    steps = [engine.step(world_factory(now=now, allies=ally))
+             for now in (10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0)]
+    assert [d.arbitration for d in steps] == [
+        "MIN_HOLD", "MIN_HOLD", "MIN_HOLD", "MIN_HOLD", "MIN_HOLD",
+        "CONFIRMING", "CONFIRMING", "CONFIRMED"]
+    assert all(d.task.identity == start.task.identity for d in steps[:-1])
+    assert steps[-1].task.kind == TaskType.SUPPORT
+    # An urgent raid on the first safe cycle is still an urgent preemption.
+    raid = DecisionEngine(config, session_id="test")
+    raid.step(world_factory(now=10.0, phase=Phase.READY))
+    urgent = raid.step(world_factory(now=10.1, enemies=((11, 3.5, 6, -1, 0),)))
+    assert urgent.arbitration == "URGENT_PREEMPT"
+    assert urgent.task.kind == TaskType.INTERCEPT and urgent.task.urgent
