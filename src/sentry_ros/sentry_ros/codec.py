@@ -164,9 +164,13 @@ def game_from_msg(message) -> GameState:
 def robot_status_to_msg(status: RobotStatus):
     result = wire.RobotStatus()
     result.stamp, result.robot_id, result.team = stamp(status.stamp), status.robot_id, int(status.team)
-    result.hp_valid = status.hp is not None and status.max_hp is not None
-    if result.hp_valid:
-        result.hp, result.max_hp = float(status.hp), float(status.max_hp)
+    # hp and max_hp are valid independently: a known hp is kept without max_hp.
+    result.hp_valid = status.hp is not None
+    if status.hp is not None:
+        result.hp = float(status.hp)
+    result.max_hp_valid = status.max_hp is not None
+    if status.max_hp is not None:
+        result.max_hp = float(status.max_hp)
     result.alive_valid = status.alive is not None
     if status.alive is not None:
         result.alive = status.alive
@@ -183,7 +187,8 @@ def robot_status_to_msg(status: RobotStatus):
 def robot_status_from_msg(message) -> RobotStatus:
     return RobotStatus(
         message.robot_id, Team(message.team), to_seconds(message.stamp),
-        message.hp if message.hp_valid else None, message.max_hp if message.hp_valid else None,
+        message.hp if message.hp_valid else None,
+        message.max_hp if message.max_hp_valid else None,
         message.alive if message.alive_valid else None,
         message.level if message.level_valid else None,
         message.ammo_ratio if message.ammo_valid else None, message.source,

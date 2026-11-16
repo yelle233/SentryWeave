@@ -32,6 +32,36 @@ def test_codec_round_trips_typed_inputs(world_factory):
     assert world_from_msg(world_to_msg(world)) == world
 
 
+def test_robot_status_hp_and_max_hp_are_valid_independently(world_factory):
+    from sentry_core.model import RobotStatus, Team
+    from sentry_interfaces import msg as wire
+    from sentry_ros.codec import (
+        robot_status_from_msg, robot_status_to_msg, world_from_msg, world_to_msg,
+    )
+
+    # A publisher that knows hp but not max_hp keeps hp (0 still means not alive); without
+    # max_hp the ratio stays unknown, never 0 or full. max_hp alone round-trips as well.
+    robots = {7: RobotStatus(7, Team.ALLY, 10.0, hp=150.0, source=1),
+              103: RobotStatus(103, Team.ENEMY, 10.0, hp=0.0, source=2),
+              104: RobotStatus(104, Team.ENEMY, 10.0, max_hp=400.0, source=2),
+              1: RobotStatus(1, Team.ALLY, 10.0, 100.0, 200.0, source=1)}
+    for status in robots.values():
+        message = robot_status_to_msg(status)
+        assert (message.hp_valid, message.max_hp_valid) == (
+            status.hp is not None, status.max_hp is not None)
+        assert robot_status_from_msg(message) == status
+    world = replace(world_factory(), robots=robots)
+    decoded = world_from_msg(world_to_msg(world))
+    assert decoded == world
+    assert {i: (s.hp, s.hp_ratio, s.known_alive) for i, s in decoded.robots.items()} == {
+        7: (150.0, None, True), 103: (0.0, None, False), 104: (None, None, None),
+        1: (100.0, 0.5, True)}
+    # A bridge that only fills hp: an unflagged max_hp is unknown, not 0.
+    only_hp = robot_status_from_msg(wire.RobotStatus(robot_id=7, team=wire.RobotStatus.ALLY,
+                                                     hp=80.0, hp_valid=True))
+    assert (only_hp.hp, only_hp.max_hp, only_hp.hp_ratio) == (80.0, None, None)
+
+
 def test_world_node_publishes_typed_topics_and_typed_values_win(config):
     import rclpy
     from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -114,27 +144,57 @@ def test_world_node_publishes_typed_topics_and_typed_values_win(config):
         rclpy.shutdown()
 
 
-def launch_default_config_file():
-    """The config_file default shared by decision.launch.py and navigation.launch.py."""
+def launch_argument_default(argument, *names):
+    """The default of ``argument``, which must be the same in each named bringup launch file."""
     import importlib.util
-    from pathlib import Path
     from launch import LaunchContext
     from launch.actions import DeclareLaunchArgument
     from launch.utilities import perform_substitutions
     from conftest import ROOT
 
     defaults = set()
-    for name in ("decision.launch.py", "navigation.launch.py"):
+    for name in names:
         spec = importlib.util.spec_from_file_location(
             name.replace(".", "_"), ROOT / "src/sentry_bringup/launch" / name)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        argument = next(entity for entity in module.generate_launch_description().entities
+        declared = next(entity for entity in module.generate_launch_description().entities
                         if isinstance(entity, DeclareLaunchArgument)
-                        and entity.name == "config_file")
-        defaults.add(perform_substitutions(LaunchContext(), argument.default_value))
+                        and entity.name == argument)
+        defaults.add(perform_substitutions(LaunchContext(), declared.default_value))
     assert len(defaults) == 1, defaults
-    return Path(defaults.pop())
+    return defaults.pop()
+
+
+def launch_default_config_file():
+    """The config_file default shared by decision.launch.py and navigation.launch.py."""
+    from pathlib import Path
+
+    return Path(launch_argument_default("config_file", "decision.launch.py",
+                                        "navigation.launch.py"))
+
+
+def test_nodes_default_to_the_launch_default_config_file():
+    import rclpy
+    from rclpy.node import Node
+    from sentry_core.config import load_config
+    from sentry_ros.common import read_config
+
+    # A node started without the launch files (ros2 run) loads the same RMUC 2027 season
+    # file as decision.launch.py and navigation.launch.py, not the demo tactics.
+    tactics = launch_default_config_file()
+    assert tactics.name == "tactics_rmuc2027.yaml"
+    rclpy.init()
+    try:
+        node = Node("default_config_test")
+        try:
+            config = read_config(node)
+            assert node.get_parameter("config_file").value == str(tactics)
+            assert config == load_config(tactics) and config.season == "rmuc2027"
+        finally:
+            node.destroy_node()
+    finally:
+        rclpy.shutdown()
 
 
 def test_own_team_parameter_keeps_self_id_derivation(tmp_path):

@@ -69,3 +69,42 @@ def test_decision_node_runs_models_of_another_field_in_rule_mode(tmp_path, confi
             node.destroy_node()
     finally:
         rclpy.shutdown()
+
+
+def test_rl_mirror_is_auto_true_or_false(tmp_path):
+    import rclpy
+    from rclpy.exceptions import InvalidParameterTypeException
+    from rclpy.parameter import Parameter
+    from sentry_ros.decision_node import DecisionNode
+    from test_model_fallback import SEASON
+    from test_rl_policy import actor_file
+    from test_ros_inputs import launch_argument_default
+
+    # auto, the launch default, follows the field's mirror setting (the 2027 field mirrors
+    # for BLUE); true and false force mirrored or unmirrored RL features on either side.
+    assert launch_argument_default("rl_mirror", "decision.launch.py", "robot.launch.py") == "auto"
+    actor = actor_file(tmp_path, width=28., height=15.)
+
+    def decision(team, *mirror):
+        return DecisionNode(parameter_overrides=[
+            Parameter("config_file", value=str(SEASON)), Parameter("own_team", value=team),
+            Parameter("rl_model", value=str(actor)),
+            *(Parameter("rl_mirror", value=value) for value in mirror)])
+
+    rclpy.init()
+    try:
+        for team, mirror, expected in (("BLUE", (), True), ("RED", ("auto",), False),
+                                       ("BLUE", ("false",), False), ("RED", ("true",), True)):
+            node = decision(team, *mirror)
+            try:
+                assert node.get_parameter("rl_mirror").value == (mirror[0] if mirror else "auto")
+                assert node.engine.goal_prior.mirror is expected, (team, mirror)
+            finally:
+                node.destroy_node()
+        with pytest.raises(ValueError, match="rl_mirror must be auto, true or false"):
+            decision("BLUE", "yes")
+        # Booleans are refused instead of being read as "follow the field".
+        with pytest.raises(InvalidParameterTypeException):
+            decision("BLUE", False)
+    finally:
+        rclpy.shutdown()

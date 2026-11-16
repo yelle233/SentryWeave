@@ -16,8 +16,10 @@ STATUS = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
 
 
 def read_config(node):
+    # Same default as decision.launch.py and navigation.launch.py, also for `ros2 run`.
     try:
-        default = str(Path(get_package_share_directory("sentry_bringup")) / "config/tactics.yaml")
+        default = str(Path(get_package_share_directory("sentry_bringup"))
+                      / "config/tactics_rmuc2027.yaml")
     except PackageNotFoundError:
         default = ""
     path = node.declare_parameter("config_file", default).value

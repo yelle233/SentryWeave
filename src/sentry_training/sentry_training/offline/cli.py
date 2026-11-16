@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sentry_core.config import load_config
 from sentry_core.navigation_features import NavigationSpec
+from sentry_core.rl_policy import MIRROR_SETTINGS, mirror_setting
 from .data import BuildOptions, build_dataset, read_split
 
 
@@ -66,7 +67,10 @@ def main(argv=None):
     play.add_argument("--trace", required=True)
     play.add_argument("--config", default="src/sentry_bringup/config/tactics.yaml")
     play.add_argument("--blend", type=float, default=0.25)
-    play.add_argument("--mirror", action="store_true")
+    play.add_argument("--mirror", type=str.lower, choices=tuple(MIRROR_SETTINGS), default="auto",
+                      nargs="?", const="true",
+                      help="RL feature mirroring like rl_mirror: auto follows the field's mirror "
+                           "setting, true/false force it; a bare --mirror means true")
     play.add_argument("--intent-model")
     play.add_argument("--utility-model")
     play.add_argument("--allow-domain-transfer", action="store_true")
@@ -105,7 +109,7 @@ def main(argv=None):
         if args.utility_model:
             config = load_utility(args.utility_model, config)
         intent = IntentModel.load(args.intent_model, config) if args.intent_model else None
-        prior = GoalPrior.load(args.actor, config, args.blend, args.mirror or None,
+        prior = GoalPrior.load(args.actor, config, args.blend, mirror_setting(args.mirror),
                                args.allow_domain_transfer)
         result = replay(config, args.trace, model=intent, policy="rl", goal_prior=prior)
     else:

@@ -142,6 +142,17 @@ class NumpyNavigationPolicy:
 SUBGOAL_KINDS = (TaskType.SUPPORT, TaskType.DEFEND)
 # Until the next inference these proposals cannot steer; a refined task keeps its sub-goal.
 KEEP_STATUSES = ("OUT_OF_FIELD", "NO_DIRECTION", "PROPOSAL_REACHED", "NO_LEGAL_PROJECTION")
+# rl_mirror / --mirror -> GoalPrior ``mirror``: auto follows the field's mirror setting (a
+# mirrored BLUE field mirrors the features); true and false force mirrored or unmirrored.
+MIRROR_SETTINGS = {"auto": None, "true": True, "false": False}
+
+
+def mirror_setting(value: str) -> bool | None:
+    """The GoalPrior ``mirror`` argument for an rl_mirror string (auto, true or false)."""
+    setting = value.lower() if isinstance(value, str) else None
+    if setting not in MIRROR_SETTINGS:
+        raise ValueError(f"rl_mirror must be auto, true or false, not {value!r}")
+    return MIRROR_SETTINGS[setting]
 
 
 class GoalPrior:

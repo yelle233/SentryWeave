@@ -16,7 +16,7 @@ from sentry_core.inputs import view_inputs
 from sentry_core.learned import load_decision_models
 from sentry_core.model import IntentType, Phase
 from sentry_core.policy import DecisionEngine
-from sentry_core.rl_policy import GoalPrior
+from sentry_core.rl_policy import GoalPrior, mirror_setting
 from sentry_core.serde import json_line, world_to_dict
 from .codec import (
     FEEDBACK_STATES, intents_to_msg, task_to_msg, threats_to_msg, world_from_msg,
@@ -32,7 +32,9 @@ class DecisionNode(Node):
         model_path = self.declare_parameter("intent_model", "").value
         rl_path = self.declare_parameter("rl_model", "").value
         rl_blend = self.declare_parameter("rl_blend", 0.25).value
-        rl_mirror = self.declare_parameter("rl_mirror", False).value
+        # auto follows the field (a mirrored BLUE field mirrors the RL features); true and
+        # false force mirrored or unmirrored features. Other values stop the node.
+        rl_mirror = mirror_setting(self.declare_parameter("rl_mirror", "auto").value)
         allow_transfer = self.declare_parameter("rl_allow_transfer", False).value
         # An intent/utility artifact fitted on another field runs in rule mode instead of
         # stopping the node; the reason is logged here and in every decision's policy_info.
@@ -41,8 +43,7 @@ class DecisionNode(Node):
             self.get_logger().warning(
                 f"{name} falls back to rule mode ({fallback['reason']}): {fallback['path']}: "
                 f"{fallback['detail']}")
-        # rl_mirror=false follows the field: a mirrored (BLUE) field mirrors the RL features.
-        prior = (GoalPrior.load(rl_path, config, rl_blend, rl_mirror or None, allow_transfer)
+        prior = (GoalPrior.load(rl_path, config, rl_blend, rl_mirror, allow_transfer)
                  if rl_path else None)
         self.engine = DecisionEngine(config, model, goal_prior=prior, model_fallbacks=fallbacks)
         self.config = config

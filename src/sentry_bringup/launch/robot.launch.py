@@ -23,7 +23,9 @@ def generate_launch_description():
         DeclareLaunchArgument("utility_model", default_value=""),
         DeclareLaunchArgument("rl_model", default_value=""),
         DeclareLaunchArgument("rl_blend", default_value="0.25"),
-        DeclareLaunchArgument("rl_mirror", default_value="false"),
+        DeclareLaunchArgument("rl_mirror", default_value="auto",
+                              description="auto follows the field's mirror setting; "
+                                          "true/false force mirrored/unmirrored RL features"),
         DeclareLaunchArgument("trace_path", default_value=""),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(share / "launch/navigation.launch.py")),

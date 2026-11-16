@@ -124,6 +124,52 @@ def test_goal_prior_mirrors_features_for_a_mirrored_field(tmp_path):
     assert not GoalPrior.load(actor, load_config(path, own_team="BLUE"), mirror=False).mirror
 
 
+def test_rl_mirror_setting_is_auto_true_or_false(tmp_path):
+    from sentry_core.config import load_config
+    from sentry_core.rl_policy import GoalPrior, mirror_setting
+    from test_rl_policy import actor_file
+
+    # auto follows the field's mirror setting; true and false force it on either side.
+    path = write_tactics(tmp_path, symmetric_field())
+    actor = actor_file(tmp_path)
+    for team, setting, expected in (("RED", "auto", False), ("BLUE", "auto", True),
+                                    ("RED", "true", True), ("BLUE", "false", False),
+                                    ("BLUE", "False", False)):
+        prior = GoalPrior.load(actor, load_config(path, own_team=team),
+                               mirror=mirror_setting(setting))
+        assert prior.mirror is expected, (team, setting)
+    for value in ("", "yes", "1", "mirrored", None, False, True):
+        with pytest.raises(ValueError, match="rl_mirror must be auto, true or false"):
+            mirror_setting(value)
+
+
+def test_replay_mirror_flag_is_auto_true_or_false(tmp_path, monkeypatch, capsys):
+    import sentry_training.evaluate
+    from sentry_training.offline.cli import main
+    from test_rl_policy import actor_file
+
+    red = write_tactics(tmp_path, symmetric_field())
+    blue = tmp_path / "blue.yaml"
+    blue.write_text(yaml.safe_dump({**yaml.safe_load(red.read_text()), "own_team": "BLUE"}))
+    actor = actor_file(tmp_path)
+    monkeypatch.setattr(sentry_training.evaluate, "replay",
+                        lambda config, trace, goal_prior=None, **_: {"mirror": goal_prior.mirror})
+
+    def mirror(config, *flag):
+        main(["replay", "--actor", str(actor), "--trace", str(tmp_path / "trace.jsonl"),
+              "--config", str(config), *flag])
+        return json.loads(capsys.readouterr().out)["mirror"]
+
+    # Like rl_mirror: auto (the default) follows the field; true and false force the features.
+    # A bare --mirror keeps its old meaning, true.
+    assert [mirror(blue), mirror(blue, "--mirror", "auto"), mirror(blue, "--mirror", "false"),
+            mirror(red), mirror(red, "--mirror", "true"), mirror(red, "--mirror")] == [
+        True, True, False, False, True, True]
+    with pytest.raises(SystemExit):
+        mirror(red, "--mirror", "yes")
+    assert "invalid choice" in capsys.readouterr().err
+
+
 def test_field_problems_are_reported(tmp_path):
     from sentry_core.config import load_config
 
