@@ -32,7 +32,7 @@ SentryWeave 不绑定特定战队串口帧或雷达私有协议，外部驱动�
 |---|---|---|---|
 | `game/status` | `sentry_interfaces/GameStatus`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | **比赛阶段不可缺失**：`phase` 未知或超时（`> 2.0 s`）立即输出紧急 `HOLD (GAME_STATE_UNKNOWN)`；非比赛期输出 `HOLD (GAME_NOT_RUNNING)`；`own_team` 与配置冲突输出 `HOLD (TEAM_MISMATCH)`。`supply_available` 可缺失（未知或 `false` 时仅停生 `RECOVER`） |
 | `robots/status` | `sentry_interfaces/RobotStatusArray`<br>1–10 Hz | **`RELIABLE`**, Volatile, KeepLast(10) | **可部分或全部缺失**（支持裁判串口、雷达站、队内链路并发按字段合并；`hp_valid` 与 `max_hp_valid` 独立；`team` 恒为相对本车的 `ALLY=1 / ENEMY=2`）：未知作 `None`（绝不当 0 或满值）；敌方血量未知关闭残血选敌加分，本机血量/发弹比例未知禁止激进 `SUPPORT` 但保留 `DEFEND` / `INTERCEPT` |
-| `structures/status` | `sentry_interfaces/StructureStatus`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(10) | **可缺失**（注意单个 `hp_valid` 同时覆盖 `hp` 与 `max_hp`）：双方基地/前哨状态未知时视为“存活但未确认”，前哨进攻战略价值乘 `0.7`；确认敌方前哨被毁立即剔除，确认己方前哨被毁抬高 `DEFEND` 战略价值 `+0.12` |
+| `structures/status` | `sentry_interfaces/StructureStatus`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(10) | **可缺失**（注意单个 `hp_valid` 同时覆盖 `hp` 与 `max_hp`）：双方基地/前哨状态未知（`None`）时视为“存活但未确认”，前哨进攻战略价值乘 `0.7`；确认敌方前哨被毁立即剔除，确认己方前哨（`own_outpost`）被毁立即清零前哨废墟威胁并剔除其驻防/拦截候选（`TARGET_DESTROYED`），同时抬高主基地 `own_base` 驻防战略价值 `+0.12` |
 | `perception/tracks` | `sentry_interfaces/ObservationArray`<br>5–20 Hz | `SensorDataQoS`（**`BEST_EFFORT`**, KeepLast(5)） | **可随时突发断流或丢包**（本机 `ALLY + self_id` 自动忽略，非 `map` 帧按采集时刻查 TF）：`0.9..5.0 s` 陈旧敌方轨迹线性衰减置信度，按敌方视野缺失率自动抬高核心防区紧迫度（最高 `+0.25`），按队友视野完整度缩放 `SUPPORT` 协同项，完整度 `< 0.6` 时按比例下调直至关闭 RL 权重 |
 | `map -> odom -> base_link`（或 `self_pose`）+ `localization_ok` | TF / `PoseWithCovarianceStamped`（10–50 Hz）<br>`std_msgs/Bool`（5–20 Hz） | TF 标准 / `SensorDataQoS`<br>`localization_ok`：**`RELIABLE`**, KeepLast(1) | **不可缺失**：本机权威定位直接使用定位输出而不做二次平滑，贴墙落入膨胀边缘时由 `arena.origin(pos)` 吸附起点防自锁；超时 `> 0.5 s` 或 `localization_ok=false` 立即进入 `SAFE_STOP`（`HOLD: LOCALIZATION_INVALID`） |
 | 赛季战术与场地配置 | [`tactics_rmuc2027.yaml`](src/sentry_bringup/config/tactics_rmuc2027.yaml) + [`field_rmuc2027.yaml`](src/sentry_bringup/config/field_rmuc2027.yaml) | 启动加载静态文件 | 只声明障碍/规则禁区、建筑、补给区、战术区域与偏好点语义，不锁死移动范围；默认 `mirror: auto` 在 `own_team=BLUE` 时绕场地中心 180° 自动换算并推导 `self_id`（`RED -> 7`、`BLUE -> 107`） |
@@ -48,7 +48,7 @@ SentryWeave 不绑定特定战队串口帧或雷达私有协议，外部驱动�
 | `world/state` | `sentry_interfaces/WorldState`<br>10 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 多源融合世界快照与运行模式（`FULL / PARTIAL / LOCAL_ONLY / SAFE_STOP`） |
 | `team/intents` | `sentry_interfaces/TeammateIntentArray`<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 在场队友 6 类战术意图（进攻前哨、守家、控区、撤退、机动、未知）概率分布与置信度 |
 | `threat/state` | `sentry_interfaces/ThreatState`<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 各 `DEFEND_BASE` 防区的最大威胁分 `score`（恒取防区内单机威胁最大值，残血奖励仅影响优先锁定的 `enemy_id` 与 `eta_sec`） |
-| `tactical/trace` | `std_msgs/String` / 滚动 JSONL<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 单行 JSON 决策全量审计流，记录 `missing_info`（6 维完整度、缺失项、生效降级动作）、`policy_info`（RL 提议、有效混合比、子目标细化状态、模型指纹回退 `model_fallbacks`）与单步耗时 `decision_ms` |
+| `tactical/trace` | `std_msgs/String` / 滚动 JSONL<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 单行 JSON 决策全量审计流，记录 `missing_info`（6 维完整度、缺失项、生效降级动作）、`policy_info`（当前生效 `goal_scope`、RL 提议、有效混合比、子目标细化状态、模型指纹回退 `model_fallbacks`）与单步耗时 `decision_ms` |
 | `compute_path_to_pose` / `navigate_to_pose` | Nav2 Action | 默认开启（`enable_executor:=true`） | 内置 `executor` 独占管理整条路径规则合法性预检（可用 `check_path_before_navigate:=false` 关闭）、目标下发、取消与终态确认 |
 | `motion/permit` & `cmd_vel` | `MotionPermit`（20 Hz）<br>`geometry_msgs/Twist`（50 Hz） | 默认开启（`enable_velocity_guard:=true`） | 单调时钟双看门狗：接收导航栈输出的 `nav_cmd_vel`（`0.25 s` 超时）与执行器运动许可（`0.3 s` 超时），限幅门控后输出最终底盘速度 `cmd_vel` |
 
@@ -61,7 +61,11 @@ from sentry_core.config import load_config
 from sentry_core.policy import DecisionEngine
 from sentry_core.tracking import WorldModel
 
-cfg = load_config("src/sentry_bringup/config/tactics_rmuc2027.yaml", own_team="RED")
+cfg = load_config(
+    "src/sentry_bringup/config/tactics_rmuc2027.yaml",
+    own_team="RED",
+    goal_scope="full",  # 可选: "full" | "own_half_and_highland" | "own_half"
+)
 world_model, engine = WorldModel(cfg), DecisionEngine(cfg)
 decision = engine.step(world_model.snapshot(now=10.0))
 ```
@@ -101,7 +105,7 @@ flowchart LR
 
 ## 仿真多局面行为演示（Arena-1 RMUC 2027）
 
-以下四段俯视轨迹动画录制自 RMUC 2027（28×15 m，5v5）完整对抗回放，展示哨兵在不同战场态势与雷达丢包条件下的在线任务切换与原因码审计：
+本项目的 RMUC 2027 闭环决策多局面验证与雷达丢包鲁棒性仿真测试基于 **[RM-Arena / Arena-1](https://github.com/RM-Arena/Arena-1)**（<https://github.com/RM-Arena/Arena-1>）对战仿真平台完成，衷心感谢 **RM-Arena** 团队为 RoboMaster 社区构建并开放高质量的物理与规则对抗仿真环境。以下四段俯视轨迹动画录制自 RMUC 2027（28×15 m，5v5）完整对抗回放，展示哨兵在不同战场态势与雷达丢包条件下的在线任务切换与原因码审计：
 
 | 支援推进（`SUPPORT · TEAM_SUPPORT_HIGH`） | 拦截偷家（`INTERCEPT · BASE_THREAT`） |
 |---|---|
@@ -127,7 +131,7 @@ flowchart LR
 | `rl_r100`（`blend=0.25`） | 20/20 | 0% | 0% / 0% | 74 ± 9% | 950 ± 371 | 28% | 0% | 51% | 21% | 0% | 0 |
 
 - 随着雷达丢包率由 `0% → 30% → 60% → 100%` 升高，`DEFEND` 驻防时间占比在规则组（`19% → 23% → 29% → 51%`）与 RL 混合组（`22% → 25% → 30% → 51%`）均单调上升，主动拦截 `INTERCEPT` 从 `12%` 收敛至 `0%`；RL 参与率同步按 `44% → 31% → 21% → 0%` 平滑退坡，全盲 `rl_r100` 自动退化为与 `rule_r100` 完全一致的保守防守，全量 180 局 **0 策略异常、0 超时、0 贴墙起点锁死**。
-- **录制环境与许可证隔离声明**：上述俯视 GIF 与批量实验在作者本机单独安装的 [`RM-Arena/Arena-1`](https://github.com/RM-Arena/Arena-1)（`v0.8.0-beta.2`，提交 `e70c1f010edf`，适用 Arena-1 非商业学习许可证 1.0）中基于回放轨迹自绘生成；**Arena-1 源码、地图资产及原始对局回放不随本 Apache-2.0 仓库分发**。`rl_*` 模型训练自 RMUC 2026 公开日志并跨赛季迁移至 2027 场地，结果仅反映仿真环境内的相对行为与工程稳定性，不代表真实比赛胜率。
+- **致谢与许可证隔离声明**：上述俯视 GIF 与 180 局批量评测在作者本机单独安装的 **[RM-Arena / Arena-1](https://github.com/RM-Arena/Arena-1)**（`v0.8.0-beta.2`，提交 `e70c1f010edf`，项目地址：<https://github.com/RM-Arena/Arena-1>，适用 Arena-1 非商业学习许可证 1.0）中运行并基于回放轨迹自绘生成，感谢 RM-Arena 团队对社区仿真测试生态的贡献；**Arena-1 源码、地图资产及原始对局回放不随本 Apache-2.0 仓库分发**。`rl_*` 模型训练自 RMUC 2026 公开日志并跨赛季迁移至 2027 场地，结果仅反映仿真环境内的相对行为与工程稳定性，不代表真实比赛胜率。
 
 ---
 
@@ -158,14 +162,18 @@ flowchart LR
 ## 场地语义参数化与红蓝自动镜像
 
 SentryWeave 将“场地哪里是什么”与“机器人可以走到哪里”严格分离，内置三套可直接使用的配置：
-- **RMUC 2027 默认赛场**（28×15 m，75 凸障碍 + 2 规则禁区）：[`tactics_rmuc2027.yaml`](src/sentry_bringup/config/tactics_rmuc2027.yaml) + [`field_rmuc2027.yaml`](src/sentry_bringup/config/field_rmuc2027.yaml)
-- **RMUC 2026 赛场**（28×15 m，60 凸障碍 + 2 规则禁区）：[`tactics_rmuc2026.yaml`](src/sentry_bringup/config/tactics_rmuc2026.yaml) + [`field_rmuc2026.yaml`](src/sentry_bringup/config/field_rmuc2026.yaml)
+- **RMUC 2027 默认赛场**（28×15 m，75 凸障碍 + 2 规则禁区，含敌方前哨破损后的纵深跟进控区 `enemy_front`）：[`tactics_rmuc2027.yaml`](src/sentry_bringup/config/tactics_rmuc2027.yaml) + [`field_rmuc2027.yaml`](src/sentry_bringup/config/field_rmuc2027.yaml)
+- **RMUC 2026 赛场**（28×15 m，57 凸障碍 + 5 规则禁区，含 `enemy_front` 跟进区）：[`tactics_rmuc2026.yaml`](src/sentry_bringup/config/tactics_rmuc2026.yaml) + [`field_rmuc2026.yaml`](src/sentry_bringup/config/field_rmuc2026.yaml)
 - **轻量参考演示场**（20×12 m）：[`tactics.yaml`](src/sentry_bringup/config/tactics.yaml)
 
 核心能力：
 1. **语义不锁死移动空间**：场地文件中的 `points` 只是可选偏好点而非白名单；每周期根据友军推进、敌方突袭与区域几何，在连通自由空间内动态生成拦截、扇形布防、侧后支援、控区与补给恢复候选点，并可自动生成 Nav2 `KeepoutFilter` 规则禁区掩码。
 2. **`mirror: auto` 红蓝一键切换**：只需以红方视角编写一份场地文件，传入 `own_team:=BLUE` 时自动绕场地中心 180° 镜像所有几何语义与禁区掩码，并自动推导哨兵官方编号（`RED -> 7`、`BLUE -> 107`）。离线 RL 通过 `rl_mirror:=auto` 红蓝通用；可选 HMM 意图模型与效用权重若遇到镜像后 `map_fingerprint` 不一致，不会中断节点，而是自动安全回退至规则模式并记入 `policy_info.model_fallbacks`。
-3. **上车前静态几何与连通性校验 CLI（`sentry-field`）**：一键校验凸多边形合法性、建筑完整性、中心对称公差以及所有区域/偏好点在 `0.1 m` 膨胀自由栅格上的四连通可达性。
+3. **可选目标点发布范围 `goal_scope`（红蓝自动适配）**：支持在战术 YAML（顶层或 `parameters:`）、`load_config(..., goal_scope=...)` 或 ROS 2 Launch 参数 `goal_scope:=...` 中按实车爬坡能力与战术纪律一键限制目标范围（越界候选与越界 RL 子目标统一以 `OUTSIDE_GOAL_SCOPE` 拒绝，同时同步写入 Nav2 `keepout.pgm` 掩码）：
+   - `full`（默认）：全场合法连通区域均可发布目标（含敌方前哨 `enemy_outpost` 与纵深推进区 `enemy_front`）；
+   - `own_half_and_highland`：仅限己方半场与高地区域（`central_highland` 等名称含 `highland` 的区域），不过中线深入敌方腹地；
+   - `own_half`：严格限制在己方半场平地且不上高地（自动排除高地多边形/圆形区域，贴界区域候选点自动投影回己方半场连通自由栅格）。
+4. **上车前静态几何与连通性校验 CLI（`sentry-field`）**：一键校验凸多边形合法性、建筑完整性、中心对称公差以及所有区域/偏好点在 `0.1 m` 膨胀自由栅格上的四连通可达性。
 
 ---
 
@@ -203,13 +211,14 @@ docker build -t sentryweave:main -f docker/Dockerfile .
 
 # 方式一（默认）：对接标准 Nav2 Action，内置 executor 独占目标生命周期 + velocity_guard 门控 nav_cmd_vel -> cmd_vel
 # 默认加载 RMUC 2027 配置；传 own_team:=BLUE 自动完成 180° 场地镜像并推导 self_id=107
+# 可选传 goal_scope:=full | own_half_and_highland | own_half 限制目标发布与禁区掩码范围
 docker run --rm -it sentryweave:main bash tools/ros_exec.bash \
-  ros2 launch sentry_bringup decision.launch.py own_team:=BLUE
+  ros2 launch sentry_bringup decision.launch.py own_team:=BLUE goal_scope:=own_half_and_highland
 
 # 方式二 / 三：关闭内置 Nav2 执行器与速度门控，对接自有 PoseStamped 规划器或直接订阅 /sentry/tactical/task
 docker run --rm -it sentryweave:main bash tools/ros_exec.bash \
   ros2 launch sentry_bringup decision.launch.py \
-  own_team:=RED enable_executor:=false enable_velocity_guard:=false
+  own_team:=RED goal_scope:=full enable_executor:=false enable_velocity_guard:=false
 ```
 
 若外部 Nav2 未开放 `compute_path_to_pose` 或全局代价图膨胀半径小于 `robot_radius`，可在方式一附加 `check_path_before_navigate:=false` 跳过发单前路径预检（目标点合法性与禁区掩码依然生效）。完整接线表、`PoseStamped` 桥接节点代码与排障清单见 [接入自有导航栈指南](docs/navigation-integration.md) 与 [实车上车教程](docs/real-robot.md)。
@@ -308,6 +317,7 @@ SentryWeave/
 
 项目参考并感谢：
 
+- [RM-Arena · Arena-1](https://github.com/RM-Arena/Arena-1)（<https://github.com/RM-Arena/Arena-1>）：本决策系统的 RMUC 2027 多局面闭环验证与雷达丢包鲁棒性仿真测试均使用 Arena-1 完成，衷心感谢 RM-Arena 团队为 RoboMaster 社区开源共享高质量仿真测试平台与规则场地数据（Arena-1 适用其非商业学习许可证 1.0，其源码与资产不随本 Apache-2.0 仓库分发）
 - [BNBU Navigator Team · RMUC-OfflineRL](https://github.com/Harkerbest/RMUC-OfflineRL)
 - [ROS 2 Navigation2 (Nav2)](https://github.com/ros-navigation/navigation2)
 

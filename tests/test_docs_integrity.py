@@ -84,6 +84,8 @@ def test_readme_required_media_and_assets_are_valid():
         "# SentryWeave",
         "未来战队",
         "Apache",
+        "https://github.com/RM-Arena/Arena-1",
+        "goal_scope",
         "SentryWeave 是独立项目，不代表 RoboMaster 官方规则、认证或背书。",
     ):
         assert token in readme, f"README.md missing protected text: {token}"

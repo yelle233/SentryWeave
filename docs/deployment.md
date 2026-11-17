@@ -84,6 +84,10 @@ structures/status: structures[] -> stamp, id (own_base/own_outpost/enemy_base/en
 
 `decision.launch.py` 与各 ROS 2 节点现默认加载 RMUC 2027 战术配置 `tactics_rmuc2027.yaml`（`schema_version: 2`，引用 `field_rmuc2027.yaml` 凸多边形场地语义并启用 `mirror: auto`）。传入 `own_team:=RED` 或 `own_team:=BLUE` 即可在加载阶段自动完成蓝方 180° 场地/禁区镜像与 `7` / `107` 号哨兵 ID 推导。
 
+`decision.launch.py`、`navigation.launch.py`、`robot.launch.py` 以及各 `sentry_ros` 节点均声明可选字符串参数 `goal_scope`（默认 `""` 沿用战术 YAML 中的 `goal_scope`，未配置时为 `"full"`；亦可显式覆盖为 `"full"`、`"own_half_and_highland"` 或 `"own_half"`）。当 `goal_scope` 设为 `"own_half_and_highland"` 或 `"own_half"` 时：
+- 决策层与执行器层拒绝所有超出允许范围的规则候选与离线 RL 子目标（记入 `OUTSIDE_GOAL_SCOPE` 与 `policy_info.goal_scope`），对红蓝双边自动按 `own_base` 所在半场判定；
+- `navigation.launch.py` 调用 `render_keepout` 生成 `keepout.pgm` 时同步将越界半场（及 `own_half` 模式下的高地）标为禁行栅格，保证 Nav2 全局重规划与局部恢复同样受限。
+
 由设备驱动提供定位、里程计、障碍扫描、定位健康和规范化裁判/雷达数据后，若需同时启动仓库参考 Nav2 与决策链，在仓库根目录执行：
 
 ```bash
@@ -92,6 +96,7 @@ source install/setup.bash
 ros2 launch sentry_bringup robot.launch.py \
   namespace:=sentry \
   own_team:=RED \
+  goal_scope:=full \
   map:=/absolute/path/season_map.yaml \
   config_file:=/absolute/path/tactics_rmuc2027.yaml \
   trace_path:=/absolute/path/logs/match.jsonl

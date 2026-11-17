@@ -14,8 +14,8 @@ SentryWeave 采用**“场地几何语义”与“车体战术参数”双文件
 
 | 配置文件 | Schema 版本 | 职责范围与核心字段 |
 |---|---|---|
-| [`field_rmuc2027.yaml`](../src/sentry_bringup/config/field_rmuc2027.yaml) | `field_version: 1` | 以**红方视角**声明纯场地语义：`bounds`（`[0.0, 0.0, 28.0, 15.0]`）、物理不可通行障碍 `obstacles`（凸多边形或矩形）、规则禁区 `keepouts`（如 `enemy_supply`、`enemy_assembly`）、四座核心建筑 `structures`（`own_base`、`own_outpost`、`enemy_base`、`enemy_outpost`）、己方补给恢复区 `supply`、圆形或多边形战术区域 `zones`（覆盖 `DEFEND_BASE`、`ATTACK_OUTPOST`、`CONTEST_AREA`）、非白名单偏好点 `points`，以及自动红蓝中心对称开关 `mirror: auto` |
-| [`tactics_rmuc2027.yaml`](../src/sentry_bringup/config/tactics_rmuc2027.yaml) | `schema_version: 2` | 引用 `field: field_rmuc2027.yaml`，定义坐标系 `frame: map`、默认阵营 `own_team: RED`（故意省略 `self_id`，由系统按 **`RED -> 7`、`BLUE -> 107`** 自动推导）、实车外接圆半径 `robot_radius`、6 维效用权重 `weights`，以及超时/防抖/恢复阈值与期望地面人数 `parameters` |
+| [`field_rmuc2027.yaml`](../src/sentry_bringup/config/field_rmuc2027.yaml) | `field_version: 1` | 以**红方视角**声明纯场地语义：`bounds`（`[0.0, 0.0, 28.0, 15.0]`）、物理不可通行障碍 `obstacles`（凸多边形或矩形）、规则禁区 `keepouts`（如 `enemy_supply`、`enemy_assembly`）、四座核心建筑 `structures`（`own_base`、`own_outpost`、`enemy_base`、`enemy_outpost`）、己方补给恢复区 `supply`、圆形或多边形战术区域 `zones`（覆盖 `DEFEND_BASE`、`ATTACK_OUTPOST`、高地与纵深跟进区 `enemy_front` 等 `CONTEST_AREA`）、非白名单偏好点 `points`，以及自动红蓝中心对称开关 `mirror: auto` |
+| [`tactics_rmuc2027.yaml`](../src/sentry_bringup/config/tactics_rmuc2027.yaml) | `schema_version: 2` | 引用 `field: field_rmuc2027.yaml`，定义坐标系 `frame: map`、默认阵营 `own_team: RED`（故意省略 `self_id`，由系统按 **`RED -> 7`、`BLUE -> 107`** 自动推导）、可选目标点发布范围 `goal_scope`（`full` / `own_half_and_highland` / `own_half`）、实车外接圆半径 `robot_radius`、6 维效用权重 `weights`，以及超时/防抖/恢复阈值与期望地面人数 `parameters` |
 
 ### 1.1 关键标定原则（切勿把场地文件当成固定点位表）
 
@@ -27,6 +27,11 @@ SentryWeave 采用**“场地几何语义”与“车体战术参数”双文件
    用卷尺测量本队哨兵底盘（含防撞条/装甲板最外沿）中心到最远角点的外接圆半径并留出 `2–3 cm` 控制跟踪余量填入 `robot_radius`（参考值 `0.35 m`），同时与自有导航栈代价图的膨胀半径对齐。
 4. **按当季赛制填写地面人数 `expected_allies` / `expected_enemies`**：
    在 `tactics_*.yaml` 的 `parameters` 段中，`expected_allies` 为**除本哨兵外**己方预期上场的地面机器人数（RMUC 常规为 `3`：英雄 + 双步兵或工程；RMUL 3v3 请按实际编制下调），`expected_enemies` 为敌方预期在场地面机器人数（RMUC 常规为 `4`）。两个参数必须为整数，用于准确计算雷达视野完整度 `missing_info.completeness`（已由裁判系统确认阵亡的机器人会自动从期望分母中扣除）。
+5. **按底盘爬坡能力与赛场纪律配置目标发布范围 `goal_scope`**：
+   可在 `tactics_*.yaml`（顶层或 `parameters:` 段）或 ROS 2 Launch 参数 `goal_scope:=...` 中从三档活动范围中任选（依据 `own_base` 相对场地中线 `mid_x` 的方位，对 `RED` 与 `mirror: auto` 下的 `BLUE` 自动对称生效）：
+   - `full`（默认）：允许发布全场合法连通目标点（包括 `enemy_outpost` 破损后随队友推进至敌方半场 `enemy_front`）；
+   - `own_half_and_highland`：仅允许己方半场与名称含 `highland` 的高地区域（如 `central_highland`），禁止跨中线进入敌方腹地；
+   - `own_half`：仅允许己方半场平地且**禁止进入高地区域**（适合底盘不爬坡或稳守半场战术）。越界规则候选、越界 RL 子目标均会以 `OUTSIDE_GOAL_SCOPE` 拒绝，同时 `navigation.launch.py` 生成的 `keepout.pgm` 掩码也会将禁行半场/高地涂黑锁死。
 
 ### 1.2 运行 `sentry-field` 同时校验红蓝双方与连通可达性
 
@@ -55,7 +60,7 @@ SentryWeave 采用**“场地几何语义”与“车体战术参数”双文件
     "obstacles": 75,
     "keepouts": 2,
     "structures": 4,
-    "zones": 5,
+    "zones": 6,
     "points": 1
   }
 }
@@ -81,6 +86,7 @@ ros2 launch sentry_bringup decision.launch.py \
   namespace:=sentry \
   config_file:="$PWD/src/sentry_bringup/config/tactics_rmuc2027.yaml" \
   own_team:=RED \
+  goal_scope:=own_half_and_highland \
   enable_executor:=false \
   enable_velocity_guard:=false \
   trace_path:=/tmp/bench_check.jsonl

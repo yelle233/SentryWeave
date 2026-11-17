@@ -211,7 +211,7 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
 | **敌方地面位置部分或全部缺失**（雷达掉线 / 遮挡） | ① 处于 `predicted_age..retention`（`0.9..5.0 s`）的 `STALE` 敌方轨迹保留最后已知位置，权重按 `stale_enemy_weight * (1 - (age - predicted_age) / (retention - predicted_age))`（默认 `stale_enemy_weight = 0.5`）线性衰减至 `0`，按保守速度 `0.7 m/s` 估计防区威胁；<br>② 对所有 `DEFEND_BASE` 防区的 `DEFEND` 候选额外增加紧迫度 `boost = missing_enemy_defense_boost * (1 - completeness["enemies"])`（默认 `missing_enemy_defense_boost = 0.25`），自动收缩稳守关键防区 | `STALE_ENEMY:<id>`<br>`ENEMY_POSITIONS_MISSING:defense+<boost>` |
 | **敌方血量未知**（无裁判敌方血量或未给 `max_hp`） | 威胁选敌优先级 `priority` 不加 `enemy_low_hp_bonus`（`0.15`），退化为纯空间威胁分选敌；若已知 `hp=0` 或 `alive=false` 则直接剔除该敌方 | `ENEMY_HP_UNKNOWN:<id>` |
 | **队友位置缺失或已知阵亡** | ① 忽略过期（`!usable`）或已知阵亡（`known_alive == False`）的队友，针对阵亡队友的支援点直接拒绝（`<goal_id>:ALLY_DOWN`）；<br>② `SUPPORT` 任务的协同项乘缩放因子 `scale = 0.5 + 0.5 * completeness["allies"]`，队友视野不全时降低孤军前压倾向 | `ALLIES_INCOMPLETE:support*<scale>` |
-| **前哨站 / 基地存活状态未知** | 视为“存活但未确认”（`alive is None`）：`ATTACK_OUTPOST` 区域的 `SUPPORT` 战略价值乘 `unconfirmed_attack_factor = 0.7`；一旦确认摧毁（`alive == False`）立即拒绝（`<goal_id>:TARGET_DESTROYED`）；若确认 `own_outpost` 被毁，`DEFEND` 战略价值提高 `+0.12` | `STRUCTURE_UNCONFIRMED:<structure>` |
+| **前哨站 / 基地存活状态未知或被毁** | 状态未知时视为“存活但未确认”（`alive is None`，绝不当作已摧毁）：`ATTACK_OUTPOST` 区域的 `SUPPORT` 战略价值乘 `unconfirmed_attack_factor = 0.7`；一旦确认敌方前哨被毁（`alive is False`）立即拒绝进攻候选（`<goal_id>:TARGET_DESTROYED`）；一旦确认己方前哨 `own_outpost`（非 `own_base` 的 `DEFEND_BASE` 建筑）被毁，立即将该前哨防区威胁清零并拒绝其 `DEFEND`/`INTERCEPT` 候选（`<goal_id>:TARGET_DESTROYED`），同时主基地 `own_base` 保持生效并获得 `DEFEND` 战略价值 `+0.12` 提升 | `STRUCTURE_UNCONFIRMED:<structure>` |
 | **本机血量 / 弹量 / 补给可用性未知** | `self_hp` 或 `self_ammo` 为 `None` 时拒绝生成 `SUPPORT` 候选（`<goal_id>:RESOURCES_UNCERTAIN_OR_LOW`），仍保留 `DEFEND` 与 `INTERCEPT`（风险项按中性 `hp=0.5` 计）；`supply_available != True` 时不生成 `RECOVER` | 记录于 `decision.rejected` 与 `missing_info.missing` |
 | **队友或敌方位置完整度 `< completeness_threshold`（`0.6`）时离线 RL 降权** | 在线加载离线 RL 模型（`GoalPrior`）时，若 `completeness["allies"] < 0.6` 或 `completeness["enemies"] < 0.6`，自动按 `scale = min(completeness["allies"], completeness["enemies"]) / 0.6` 线性下调本周期混合权重 `effective_blend = rl_blend * scale`；当任一方位置全丢（`0.0`）时 `effective_blend = 0.0`，**自动退回 `SHADOW` 影子模式**（仅记录建议点，既不改变候选排序也不做子目标细化） | `RL_BLEND_REDUCED:INFO_INCOMPLETE:<categories>` |
 | **本机定位失效 / 比赛阶段非 `RUNNING` 或未知 / 阵营不匹配 / 本机阵亡** | 立即输出紧急安全驻守 `HOLD`（`urgent=True`，原因码见 §3.1），执行器撤销运动许可使底盘停稳；**一旦安全条件恢复（如定位恢复或比赛从 `READY` 切入 `RUNNING`），首个决策周期跳过 `min_hold`、`switch_margin` 与 `confirm_cycles`，零延迟切换至最优任务，仲裁状态记为 `SAFETY_RECOVERED`** | 体现于 `task.reason` 与恢复周期的 `decision.arbitration = "SAFETY_RECOVERED"` |
@@ -254,6 +254,7 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
     ]
   },
   "policy_info": {
+    "goal_scope": "full",
     "algorithm": "iql",
     "model_id": "9f8c...e21a",
     "dataset_id": "rmuc2026_offline_v1",
@@ -294,8 +295,9 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
   - `rl_blend`（仅在配置了 `rl_model` 时出现）：记录配置权重 `configured`、经位置完整度缩放后的 `effective` 以及触发降权的 `reason`。
   - `degraded`：本周期实际生效的所有缺失降级修正项列表（保序去重）。
 - **`policy_info`**（详见 [离线强化学习](offline-rl.md)）：
+  - `goal_scope`：当前生效的目标点发布范围约束（`"full"`、`"own_half_and_highland"` 或 `"own_half"`）。
   - `status`：离线 RL 提议状态，取值包括 `"READY"`、`"SHADOW"`（`effective_blend == 0` 时仅记录不干预，同时附带 `proposal_status`）、`"NO_FEASIBLE_TASK"`、`"OUT_OF_FIELD"`、`"NO_DIRECTION"`、`"PROPOSAL_REACHED"`、`"NO_LEGAL_PROJECTION"` 或 `"INVALID_MODEL_OUTPUT"`。
-  - `subgoal_refined` 与 `subgoal_reason`：**离线 RL 只细化不篡改合同的审计字段**。仲裁选出胜出任务后，投影合法子目标仅允许细化**非紧急 `SUPPORT` / `DEFEND` 任务**的目标坐标（须落在该任务所属区域内或距原规则目标点 `<= goal_update_distance [1.5 m]`、连通可达，且通过冷却与友军间距 `ally_clearance` 检查）。细化成功时 `subgoal_refined=true`、`subgoal_reason="REFINED"`（或在提议暂不可导引时保持已细化点 `"KEPT:<status>"`），并记录 `subgoal` 与原规则点 `subgoal_base`；未细化时 `subgoal_refined=false`，`subgoal_reason` 明确给出 `"NO_RULE_TASK"`、`"URGENT_TASK"`、`"NOT_REFINABLE:INTERCEPT"`、`"NOT_REFINABLE:RECOVER"`、`"OUTSIDE_TASK_AREA"`、`"UNREACHABLE"`、`"FAILURE_COOLDOWN"`、`"ALLY_OCCUPIED"` 或当前 `status`。
+  - `subgoal_refined` 与 `subgoal_reason`：**离线 RL 只细化不篡改合同的审计字段**。仲裁选出胜出任务后，投影合法子目标仅允许细化**非紧急 `SUPPORT` / `DEFEND` 任务**的目标坐标（须满足 `goal_scope`、落在该任务所属区域内或距原规则目标点 `<= goal_update_distance [1.5 m]`、连通可达，且通过冷却与友军间距 `ally_clearance` 检查）。细化成功时 `subgoal_refined=true`、`subgoal_reason="REFINED"`（或在提议暂不可导引时保持已细化点 `"KEPT:<status>"`），并记录 `subgoal` 与原规则点 `subgoal_base`；未细化时 `subgoal_refined=false`，`subgoal_reason` 明确给出 `"NO_RULE_TASK"`、`"URGENT_TASK"`、`"NOT_REFINABLE:INTERCEPT"`、`"NOT_REFINABLE:RECOVER"`、`"OUTSIDE_GOAL_SCOPE"`、`"OUTSIDE_TASK_AREA"`、`"UNREACHABLE"`、`"FAILURE_COOLDOWN"`、`"ALLY_OCCUPIED"` 或当前 `status`。
   - `model_fallbacks`（仅当 `intent_model` 或 `utility_model` 发生安全回退时出现）：例如场地启用 `mirror: auto` 切换到蓝方（`own_team=BLUE`）后 `map_fingerprint` 改变，若仍传入仅在红方场地上训练的 HMM 或效用权重文件，节点不会报错停机，而是自动回退至规则意图估计器或战术文件权重，并在每帧 `model_fallbacks` 中保留完整原因。
 
 ---
