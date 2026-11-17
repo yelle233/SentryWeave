@@ -155,26 +155,6 @@ flowchart LR
 
 ---
 
-## 与现有开源 RoboMaster 哨兵决策 / 强化学习项目对比
-
-下表基于公开仓库源码、配置文件与文档核验整理，仅陈述可从代码核实的工程边界差异：
-
-| 项目 | 许可与定位 | 1. 决策范式 | 2. 雷达 / 裁判缺失处理 | 3. 导航解耦与接口 | 4. 场地参数化与校验 | 5. 机载部署依赖与开销 |
-|---|---|---|---|---|---|---|
-| **SentryWeave**（本项目） | Apache-2.0 · ROS 2 Jazzy / 纯 Python 哨兵协同决策与离线 RL | 规则效用 + 防抖租约/紧急抢占 + 可选 HMM 意图 + 离线 RL（BC / IQL / DT）路线混合与非紧急 `SUPPORT`/`DEFEND` 区域内子目标细化（绝不篡改规则选出的任务类型，含 `rl_blend=0` 影子模式） | 逐字段 `*_valid` 有效位与源时间戳；未知不作 0 或满值；陈旧敌方轨迹置信度线性衰减并抬高核心防区权重；按位置完整度自动缩减直至关闭 RL 权重，输出 `missing_info` 审计 | 强类型多源输入（兼容旧 `RefereeState`）+ 纯 Python `DecisionEngine.step(World)`；支持 Nav2 Action、`PoseStamped` 话题桥接或直接订阅 `TacticalTask` | 独立 YAML 场地语义（凸多边形障碍/禁区、建筑、补给区、区域、非白名单偏好点）+ 每周期动态候选点 + `mirror: auto` 红蓝换算 + `sentry-field` 校验 CLI + 自动生成 Nav2 `KeepoutFilter` 掩码 | **车端仅需 NumPy + PyYAML**（无 GPU / PyTorch / CUDA）：BC/IQL 5.9 μs（535 KB），DT 0.29 ms（2.8 MB）；RMUC 2027 单步 p50 2.44 ms，2 Hz 节点单核 3.2%–3.7%、RSS 72–80 MB |
-| [**PolarBear** `pb2025_sentry_behavior`](https://github.com/SMBU-PolarBear-Robotics-Team/pb2025_sentry_behavior) + [`pb2025_sentry_nav`](https://github.com/SMBU-PolarBear-Robotics-Team/pb2025_sentry_nav) | Apache-2.0 · ROS 2 Humble 哨兵导航与行为树 | `BehaviorTree.CPP` 4.6.2 XML 规则行为树 + 代价图 36 扇区攻击点采样（`CalculateAttackPose`），无意图学习或 RL 模块 | 裁判与视觉回调直接覆盖写入 `GlobalBlackboard`；条件节点仅检查键是否收到过消息，无逐字段有效位、超时淘汰或雷达掉线降级 | 依赖本队 `pb_rm_interfaces`（v1.7.0）与 `auto_aim_interfaces`，配套 `pb2025_sentry_nav`；因上游 `BehaviorTree.ROS2` `halt()` 问题示例树改发 `goal_pose` 话题 | 巡逻/补给坐标以 `"4.65;-3.5;0"` 字符串写在 BT XML 节点属性中，无独立场地语义 YAML、`mirror: auto` 或静态场地校验工具 | C++ 编译节点，CPU 开销低、无神经网络依赖；需 `vcstool` 拉取源码编译定制 `BehaviorTree.ROS2` 与全套自定义接口包 |
-| [**SCURM** `SCURM_SentryNavigation`](https://github.com/PolarisXQ/SCURM_SentryNavigation)（[`rm_decision_cpp`](https://github.com/PolarisXQ/SCURM_SentryNavigation/tree/master/rm_decision_cpp)） | 源码公开（子包各自许可）· ROS 2 Humble 整车导航决策栈 | 修改版 `BehaviorTree.CPP` 规则行为树（区域追击、多条件补给选择），无意图估计或 RL | 读取仓库内 `rm_interfaces` 与自瞄消息，假定状态按协议更新，无逐字段有效位、陈旧衰减或完整度降级 | 单仓库紧耦合修改版 `FAST_LIO` 重定位、地形分析、Livox 驱动、`cmd_chassis` 与本队通讯协议 | 点位与区域判断随行为树 XML / C++ 配置维护，无独立多边形场地语义、`mirror: auto` 或场地校验 CLI | 原生 C++ 运行（仓库报告定位+地形+Nav2+决策在 NUC12 总占用约 30%），无深度学习运行时 |
-| [**DJI `RoboRTS`** `roborts_decision`](https://github.com/RoboMaster/RoboRTS)（及 ROS 2 移植 [`tars_sentry_decision`](https://github.com/TARS-Go-Nav/tars_sentry_decision)） | GPL-3.0 · ROS 1 Kinetic（移植版 ROS 2 Humble）经典行为树 | 自研 C++ 头文件行为树 + `Blackboard`（巡逻、追击、逃跑、补给），无学习/RL 策略 | `Blackboard` 缓存最新回调，未区分字段未知/过期与零值，无雷达掉线置信度衰减 | 上游绑定 `roborts_msgs` / `roborts_planning`；ROS 2 移植版接 Nav2 但内置绑定本队 `tars_msgs/SerialReceive` 串口消息 | 在 `decision.prototxt` 或 `rmuc_map.xml` 枚举固定坐标点，换边或换赛季需手工改写坐标 | 原生 C++ 节点，CPU/内存开销极低，无机器学习依赖 |
-| [**CASIA Neurons** `RMAI2020-Decision`](https://github.com/DRL-CASIA/RMAI2020-Decision) | MIT · ROS 1 Kinetic ICRA 2v2 行为树与多智能体 RL | `roborts_decision` 行为树 **或** 71 维输入 → FC-LSTM → 16 离散动作 A3C 模型直接选固定巡逻点/敌方目标，无规则效用包络、防抖租约或影子模式 | 敌/友采用二值可见位并将缺失槽位填 `0.0`，自身与友方血量/弹量无有效位或超时降级 | 紧耦合 ROS 1 `RoboRTS` 的 `Blackboard`、`CostMap2D` 与 `ChassisExecutor` | `nn_behavior.h` 硬编码 8×5 m 中心偏移与 `prototxt` 固定 10 个巡逻点槽位，改点位数即改变动作维度 | 需机载配备 Jetson Xavier 并源码编译安装 PyTorch C++（`libtorch` 1.1.0）与 CUDA/cuDNN |
-| [**BNBU Navigator** `RMUC-OfflineRL`](https://github.com/Harkerbest/RMUC-OfflineRL) | MIT（仅代码）· Python + PyTorch 官方日志离线 RL 框架 | 基于 613 局 RMUC 2026 公开裁判日志的 1 Hz 全兵种离线 RL（IQL / BC / DT，161 维状态 → 位移 + 开火 + 选敌），配 `apply_safety` 步长/热量/外框裁剪；不含在线任务仲裁或动态候选生成 | 默认读取 161 维全量裁判日志特征（含敌方血量、等级档位、经济、经验交火图；支持离线可见半径遮罩），无在线异步消息超时或按完整度回退规则 | 纯 Python `MLPPolicyRunner.step(obs_161)`，不含 ROS 2 消息、TF 世界模型、Nav2 Action 状态机或底盘速度门控 | 固定 RMUC 2026 28×15 m 外框裁剪与蓝方 180° 镜像，不含场地内部多边形障碍/禁区语义或连通可达投影 | 在线推理依赖 PyTorch（`torch.load` 加载 `best.pt`，支持 CUDA 或 CPU） |
-| [**RM-Arena** `Arena-1`](https://github.com/RM-Arena/Arena-1) + [`Arena-RL`](https://github.com/RM-Arena/Arena-RL) | Arena-1 非商业学习许可 1.0（禁商用）· Rust + Python 仿真与分层 PPO | RMUC 2027/2026 物理仿真平台、`VectorArena` 并行环境，以及 10 Hz 低层技能 PPO + 1 Hz 高层 PPO / 外部 LLM 指挥 | 模拟器内置局部相机视线限制与短时目标记忆，不面向实车裁判串口 + 雷达站异步缺失融合 | 仿真器专用 Python SDK（`act(obs, state)`、`sdk.navigate`）与 Gymnasium / JSONL 协议，无 ROS 2 / Nav2 实车接口 | 地图几何内置于 Rust 模拟器规则配置（`config/rules.json`），不面向外部实车地图提供自定义 YAML 场地语义与禁区掩码生成 | 需 Rust 仿真引擎 + PyTorch / Stable-Baselines3（LLM 模式需外部 API），非商业许可证限制直接并入 Apache-2.0 工程 |
-
-**边界说明与致谢**：
-- **上下层互补而非替代**：`pb2025_sentry_nav`、`SCURM_SentryNavigation` 以及 [`CSU-RM-Sentry`](https://github.com/baiyeweiguang/CSU-RM-Sentry) 等优秀开源工程的核心贡献在于激光里程计（Point-LIO / FAST-LIO2）、重定位、地形分割与全向局部控制；SentryWeave 不实现激光 SLAM 或底盘控制器，而是专门提供上层“残缺信息融合 → 可解释协同战术仲裁 → 安全目标租约与速度门控”，可直接架设在这些底层导航栈之上。
-- **离线强化学习上游关系与实事求是的结论**：本项目的官方日志导入与离线 RL 训练方法致谢并参考了 [`Harkerbest/RMUC-OfflineRL`](https://github.com/Harkerbest/RMUC-OfflineRL)，针对机载实车做了三项工程改造：① 将观测收缩为机载/雷达可合法获取的 73 维特征（剔除敌方血量、经济、回溯朝向等特权字段）；② 导出经数值一致性测试的纯 NumPy `actor.json` 移除车端 PyTorch 依赖；③ 放入“规则选任务 + 非紧急区域内微调 + 缺失自动降权/影子模式”的安全包络中。与上游独立评估结论一致，当前基于公开日志的离线 IQL / DT 尚未在闭环胜率上证明显著优于规则/BC，SentryWeave 的核心工程收益在于**零非法目标、雷达 0%–100% 掉线平稳降级以及 `rl_blend=0` 零风险上车采集影子数据**。
-
----
-
 ## 场地语义参数化与红蓝自动镜像
 
 SentryWeave 将“场地哪里是什么”与“机器人可以走到哪里”严格分离，内置三套可直接使用的配置：
