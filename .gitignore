@@ -24,6 +24,7 @@ htmlcov/
 *.swp
 *.swo
 docs/superpowers/
+.superpowers/
 
 # Research inputs and generated model/binary data
 *.sqlite

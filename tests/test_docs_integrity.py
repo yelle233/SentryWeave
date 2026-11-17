@@ -114,11 +114,10 @@ def test_python_code_blocks_in_new_guides_compile():
         ROOT / "docs/interfaces.md",
         ROOT / "docs/navigation-integration.md",
         ROOT / "docs/real-robot.md",
+        ROOT / "README.md",
     ]
     for doc in docs:
         blocks = PY_BLOCK_RE.findall(doc.read_text(encoding="utf-8"))
         assert blocks, f"Expected at least one python example in {doc.name}"
         for idx, code in enumerate(blocks):
             compile(code, f"{doc.name}#block{idx}", "exec")
-    for idx, code in enumerate(PY_BLOCK_RE.findall((ROOT / "README.md").read_text("utf-8"))):
-        compile(code, f"README.md#block{idx}", "exec")

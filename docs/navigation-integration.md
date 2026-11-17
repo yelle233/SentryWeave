@@ -13,7 +13,7 @@ SentryWeave 将**多机态势融合与战术决策（`world_model` + `decision`�
 | 接入方式 | 适用团队 | `decision.launch.py` 参数 | 导航执行权与安全门控 |
 |---|---|---|---|
 | **方式一：标准 Nav2 Action（推荐）** | 使用 ROS 2 Jazzy Nav2（或兼容 `NavigateToPose` Action 的导航栈） | 默认（`enable_executor:=true enable_velocity_guard:=true`） | 内置 `executor` 独占管理取消/终态确认/预检，`velocity_guard` 门控 `nav_cmd_vel -> cmd_vel` |
-| **方式二：目标点话题（`PoseStamped`）** | 自研全局/局部规划器接收 `geometry_msgs/PoseStamped` 目标点（如点云分割 + 局部轨迹跟踪栈） | `enable_executor:=false enable_velocity_guard:=false` | 运行本文提供的 ~35 行 `TaskToPoseBridge` 桥接节点，把 `tactical/task` 转为去重 `goal_pose` 与冷却反馈 |
+| **方式二：目标点话题（`PoseStamped`）** | 自研全局/局部规划器接收 `geometry_msgs/PoseStamped` 目标点（如点云分割 + 局部轨迹跟踪栈） | `enable_executor:=false enable_velocity_guard:=false` | 运行本文提供的约 75 行 `TaskToPoseBridge` 桥接节点，把 `tactical/task` 转为去重 `goal_pose` 与冷却反馈 |
 | **方式三：仅输出任务 / 纯 Python 嵌入** | 在自研 C++/Python 主控中统一协调底盘、小陀螺转速与云台，或不使用 ROS | `enable_executor:=false enable_velocity_guard:=false`（或直接 `import sentry_core`） | 下游直接订阅 `tactical/task`（回传可选 `tactical/feedback`），或直接调用 `DecisionEngine.step(World)` |
 
 三种模式的数据流分界如下：
