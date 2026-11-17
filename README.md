@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" width="136" alt="未来战队 WEI LAI" />
+</p>
+
 # SentryWeave
 
 [![CI](https://github.com/yelle233/SentryWeave/actions/workflows/ci.yml/badge.svg)](https://github.com/yelle233/SentryWeave/actions/workflows/ci.yml)
@@ -5,13 +9,9 @@
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776ab)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue)](LICENSE)
 
-**Cooperative sentry decision making and offline navigation learning for ROS 2 Jazzy.**
+**Open-interface, radar-dropout-resilient cooperative sentry decision making and pure-NumPy onboard offline RL for RoboMaster (ROS 2 Jazzy & pure Python).**
 
-SentryWeave 是面向 RoboMaster 哨兵的自主协同决策与离线学习框架。系统结合自身资源、队友运动趋势、
-敌方威胁和区域覆盖，在支援、阻截、防守、恢复及保持任务之间选择，并通过 Nav2 执行导航。
-
-项目提供可解释的规则基线、可训练的 HMM 意图模型，以及基于 RMUC 比赛日志的
-**BC、IQL、Decision Transformer** 导航子目标学习。训练、回放与在线运行共用核心数据模型和约束。
+SentryWeave 是面向 RoboMaster 哨兵的**开放输入输出接口、雷达信息缺失鲁棒协同决策与纯 NumPy 机载离线强化学习框架**。系统对多源异步输入做源时间戳与逐字段有效位融合，在雷达掉线或裁判字段残缺时平滑保守降级；结合可解释规则效用、可选 HMM 队友意图估计与基于公开赛事日志训练的 **BC / IQL / Decision Transformer** 模型，输出带租约的合法战术目标，并可与任意 ROS 2 Nav2 栈、`PoseStamped` 自研规划器或纯 Python 主控解耦对接。
 
 | 项目信息 | 内容 |
 |---|---|
@@ -20,80 +20,223 @@ SentryWeave 是面向 RoboMaster 哨兵的自主协同决策与离线学习框�
 | 维护者 | [yelle233](https://github.com/yelle233) |
 | 联系邮箱 | [1376982098@qq.com](mailto:1376982098@qq.com) |
 
+---
 
-## 功能
+## 决策需要什么输入、给出什么输出
 
-- **战场状态**：统一坐标与源时间戳，跟踪敌我位置，处理缺帧、跳变、身份重建和未知状态。
-- **协同决策**：概率意图、分区威胁、合法候选点、效用评分与任务防抖。
-- **离线学习**：官方 SQLite 导入、整场分组划分、BC/IQL/DT 训练、独立评测和模型导出。
-- **执行约束**：Nav2 Goal 生命周期管理、取消终态确认、任务租约、禁区过滤和速度门控。
-- **仿真与回放**：轻量运动学场景、JSONL/rosbag2 回放。
-- **部署接口**：Python/ROS 2 模块化实现，NumPy 模型推理，差速参考配置与 MPPI Omni 配置。
+SentryWeave 不绑定特定战队串口帧或雷达私有协议，外部驱动只需映射到标准化的强类型接口（未获知的字段置 `*_valid = false`）。完整逐字段契约、有效位差异与桥接代码见 [开放输入输出接口规范](docs/interfaces.md)。
+
+### 输入总表（默认命名空间 `/sentry`，均可重映射）
+
+| 输入通道 / 配置 | 类型与建议频率 | `world_model` 订阅 QoS | 可否缺失与缺失时的决策行为 |
+|---|---|---|---|
+| `game/status` | `sentry_interfaces/GameStatus`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | **比赛阶段不可缺失**：`phase` 未知或超时（`> 2.0 s`）立即输出紧急 `HOLD (GAME_STATE_UNKNOWN)`；非比赛期输出 `HOLD (GAME_NOT_RUNNING)`；`own_team` 与配置冲突输出 `HOLD (TEAM_MISMATCH)`。`supply_available` 可缺失（未知或 `false` 时仅停生 `RECOVER`） |
+| `robots/status` | `sentry_interfaces/RobotStatusArray`<br>1–10 Hz | **`RELIABLE`**, Volatile, KeepLast(10) | **可部分或全部缺失**（支持裁判串口、雷达站、队内链路并发按字段合并；`hp_valid` 与 `max_hp_valid` 独立；`team` 恒为相对本车的 `ALLY=1 / ENEMY=2`）：未知作 `None`（绝不当 0 或满值）；敌方血量未知关闭残血选敌加分，本机血量/发弹比例未知禁止激进 `SUPPORT` 但保留 `DEFEND` / `INTERCEPT` |
+| `structures/status` | `sentry_interfaces/StructureStatus`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(10) | **可缺失**（注意单个 `hp_valid` 同时覆盖 `hp` 与 `max_hp`）：双方基地/前哨状态未知时视为“存活但未确认”，前哨进攻战略价值乘 `0.7`；确认敌方前哨被毁立即剔除，确认己方前哨被毁抬高 `DEFEND` 战略价值 `+0.12` |
+| `perception/tracks` | `sentry_interfaces/ObservationArray`<br>5–20 Hz | `SensorDataQoS`（**`BEST_EFFORT`**, KeepLast(5)） | **可随时突发断流或丢包**（本机 `ALLY + self_id` 自动忽略，非 `map` 帧按采集时刻查 TF）：`0.9..5.0 s` 陈旧敌方轨迹线性衰减置信度，按敌方视野缺失率自动抬高核心防区紧迫度（最高 `+0.25`），按队友视野完整度缩放 `SUPPORT` 协同项，完整度 `< 0.6` 时按比例下调直至关闭 RL 权重 |
+| `map -> odom -> base_link`（或 `self_pose`）+ `localization_ok` | TF / `PoseWithCovarianceStamped`（10–50 Hz）<br>`std_msgs/Bool`（5–20 Hz） | TF 标准 / `SensorDataQoS`<br>`localization_ok`：**`RELIABLE`**, KeepLast(1) | **不可缺失**：本机权威定位直接使用定位输出而不做二次平滑，贴墙落入膨胀边缘时由 `arena.origin(pos)` 吸附起点防自锁；超时 `> 0.5 s` 或 `localization_ok=false` 立即进入 `SAFE_STOP`（`HOLD: LOCALIZATION_INVALID`） |
+| 赛季战术与场地配置 | [`tactics_rmuc2027.yaml`](src/sentry_bringup/config/tactics_rmuc2027.yaml) + [`field_rmuc2027.yaml`](src/sentry_bringup/config/field_rmuc2027.yaml) | 启动加载静态文件 | 只声明障碍/规则禁区、建筑、补给区、战术区域与偏好点语义，不锁死移动范围；默认 `mirror: auto` 在 `own_team=BLUE` 时绕场地中心 180° 自动换算并推导 `self_id`（`RED -> 7`、`BLUE -> 107`） |
+| `referee/state` | `sentry_interfaces/RefereeState`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | **旧版兼容接口（将废弃，可选）**：同一语义字段只要上方新强类型接口有效且未超时，一律以新接口为准 |
+
+> **DDS QoS 兼容性提示**：`game/status`、`robots/status`、`structures/status`、`localization_ok`（及 `referee/state`）订阅端均为 `RELIABLE`。编写上游桥接节点时发布端必须同样使用 `RELIABLE`，若误用 `BEST_EFFORT` 将因 QoS 不兼容被 DDS 静默丢弃。
+
+### 输出总表
+
+| 输出通道 / 动作 | 类型与默认频率 | QoS / 开关 | 语义与下游消费契约 |
+|---|---|---|---|
+| `tactical/task` | `sentry_interfaces/TacticalTask`<br>2 Hz（临界跳变即发） | **`RELIABLE`**, Volatile, KeepLast(1) | 带 `(session_id, task_id)` 与租约截止时刻 `valid_until`（默认 `2.0 s`）的战术指令：`HOLD / SUPPORT / INTERCEPT / DEFEND / RECOVER`、严格满足 `arena.legal(goal)` 的 `map` 系目标位姿 `target_pose`、`urgent` 抢占位与 `reason_code`。下游可通过 `tactical/feedback` 回传 `FAILED / REJECTED / CANCELED / SUCCEEDED` 驱动 `5.0 s` 失败点冷却 |
+| `world/state` | `sentry_interfaces/WorldState`<br>10 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 多源融合世界快照与运行模式（`FULL / PARTIAL / LOCAL_ONLY / SAFE_STOP`） |
+| `team/intents` | `sentry_interfaces/TeammateIntentArray`<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 在场队友 6 类战术意图（进攻前哨、守家、控区、撤退、机动、未知）概率分布与置信度 |
+| `threat/state` | `sentry_interfaces/ThreatState`<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 各 `DEFEND_BASE` 防区的最大威胁分 `score`（恒取防区内单机威胁最大值，残血奖励仅影响优先锁定的 `enemy_id` 与 `eta_sec`） |
+| `tactical/trace` | `std_msgs/String` / 滚动 JSONL<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 单行 JSON 决策全量审计流，记录 `missing_info`（6 维完整度、缺失项、生效降级动作）、`policy_info`（RL 提议、有效混合比、子目标细化状态、模型指纹回退 `model_fallbacks`）与单步耗时 `decision_ms` |
+| `compute_path_to_pose` / `navigate_to_pose` | Nav2 Action | 默认开启（`enable_executor:=true`） | 内置 `executor` 独占管理整条路径规则合法性预检（可用 `check_path_before_navigate:=false` 关闭）、目标下发、取消与终态确认 |
+| `motion/permit` & `cmd_vel` | `MotionPermit`（20 Hz）<br>`geometry_msgs/Twist`（50 Hz） | 默认开启（`enable_velocity_guard:=true`） | 单调时钟双看门狗：接收导航栈输出的 `nav_cmd_vel`（`0.25 s` 超时）与执行器运动许可（`0.3 s` 超时），限幅门控后输出最终底盘速度 `cmd_vel` |
+
+### 不经过 ROS 2 的纯 Python 进程内调用
+
+核心包 `sentry_core` 零 ROS 依赖（仅依赖 `numpy` 与 `PyYAML`），自研 Python 主控或自定义仿真器可直接构造 `WorldModel` 并调用 `DecisionEngine.step(world)`：
+
+```python
+from sentry_core.config import load_config
+from sentry_core.policy import DecisionEngine
+from sentry_core.tracking import WorldModel
+
+cfg = load_config("src/sentry_bringup/config/tactics_rmuc2027.yaml", own_team="RED")
+world_model, engine = WorldModel(cfg), DecisionEngine(cfg)
+decision = engine.step(world_model.snapshot(now=10.0))
+```
+
+完整输入注入示例见 [开放输入输出接口规范 §5.1](docs/interfaces.md#51-示例-a不依赖-ros-2-的纯-python-调用sentry_core)，三种下游导航接线方式（Nav2 Action、`PoseStamped` 话题桥接、直接消费 `TacticalTask`）见 [接入自有导航栈指南](docs/navigation-integration.md)。
+
+---
+
+## 系统架构与缺失鲁棒设计
 
 ```mermaid
 flowchart LR
-  Inputs[定位 / 雷达 / 裁判] --> World[世界模型]
-  World --> Context[意图 / 威胁]
-  Context --> Candidates[合法候选任务]
-  World --> Policy[可选学习策略]
-  Candidates --> Rank[评分与仲裁]
-  Policy --> Rank
-  Rank --> Executor[任务执行器]
-  Executor --> Nav2[Nav2 / BT.CPP 4]
-  Nav2 --> Guard[速度门控]
-  Guard --> Chassis[底盘]
+  subgraph Inputs["多源可缺失异步输入"]
+    Loc["TF / self_pose<br>+ localization_ok"]
+    Game["game/status<br>(RELIABLE)"]
+    Rob["robots/status &<br>structures/status (RELIABLE)"]
+    Radar["perception/tracks<br>(雷达 / 视觉 SensorData)"]
+  end
+
+  Loc & Game & Rob & Radar --> WM["WorldModel (10 Hz)<br>源时间戳校验 · 逐字段合并<br>6 维信息完整度评估"]
+  WM --> Ctx["队友意图估计 (规则 / HMM)<br>& 防区最大威胁评估"]
+  Ctx --> Cand["TacticalMap 动态候选生成<br>凸多边形可见图 · 连通可达投影<br>缺失保守降级效用评分"]
+  WM --> RL["可选纯 NumPy 离线 RL<br>(BC / IQL / DT)<br>完整度不足自动降权至 SHADOW"]
+  Cand & RL --> Arb["防抖保持 · 紧急抢占<br>SAFETY_RECOVERED 零延迟出击<br>非紧急 SUPPORT/DEFEND 区域内细化"]
+  Arb --> Out1["方式一：内置 Executor + Nav2 Action<br>nav_cmd_vel -> velocity_guard -> cmd_vel"]
+  Arb --> Out2["方式二：TaskToPoseBridge<br>PoseStamped goal_pose -> 自研规划器"]
+  Arb --> Out3["方式三：自研主控直接订阅<br>TacticalTask / TaskFeedback"]
 ```
 
-## 获取代码
+- **统一“未知”与单调保守降级**：过期或 `*_valid=false` 的字段统一表示为 `None`，既不当作 `0` 血阵亡，也不当作满血安全；已确认阵亡（`known_alive == False`）的机器人自动从期望在场人数分母中扣除，避免将对手减员误判为雷达掉线。当雷达突发中断时，最近 `0.9..5.0 s` 内的敌方最后已知位置按线性衰减权重继续参与威胁计算，基地防区驻防紧迫度按 `0.25 * (1 - completeness["enemies"])` 自动抬升，队友失联时按 `0.5 + 0.5 * completeness["allies"]` 收敛孤军前压倾向。安全原因触发的 `HOLD`（如开赛前 `READY` 或短时定位抖动）在恢复正常的首个周期跳过防抖窗口立即切换最优任务（`SAFETY_RECOVERED`）。
+- **离线 RL“只细化不越权”合同与影子模式**：
+  1. **路线混合**：`GoalPrior` 先在相同推进步长上对可行规则候选计算方向一致性得分，按 `effective_blend` 混合效用；
+  2. **只细化不篡改**：经防抖仲裁选出胜出规则任务后，投影到合法可达空间的 RL 子目标**仅允许微调非紧急 `SUPPORT` / `DEFEND` 任务的目标坐标**（必须落在该任务所属区域内或距原规则点 `<= 1.5 m`、连通可达且满足友军安全间距），**绝不改变胜出任务的类型、区域、关联机器人或紧急属性**；一旦细化坐标导航失败，仅将 `rl_subgoal` 冷却 `5.0 s` 并立即恢复原规则目标点；
+  3. **视野残缺自动退坡与影子采集**：当 `allies` 或 `enemies` 位置完整度低于 `0.6` 时，`effective_blend` 自动按比例下调直至 `0`（退回纯规则）；设置 `rl_blend:=0.0` 即启用**影子模式（`SHADOW`）**——实车运动 100% 由规则策略控制，同时在 `tactical/trace` 中完整记录每帧模型提议供赛后 `sentry-rl replay` 复盘。
+
+---
+
+## 仿真多局面行为演示（Arena-1 RMUC 2027）
+
+以下四段俯视轨迹动画录制自 RMUC 2027（28×15 m，5v5）完整对抗回放，展示哨兵在不同战场态势与雷达丢包条件下的在线任务切换与原因码审计：
+
+| 支援推进（`SUPPORT · TEAM_SUPPORT_HIGH`） | 拦截偷家（`INTERCEPT · BASE_THREAT`） |
+|---|---|
+| ![支援推进](docs/media/support-push.gif)<br><sub>变体 `rl_r0`（红方 7 号，雷达丢包 0%）：队友向敌方前哨协同推进时，哨兵生成侧后支援点并在区域内受控细化站位。</sub> | ![拦截偷家](docs/media/intercept-raid.gif)<br><sub>变体 `rule_r30`（蓝方 107 号，`mirror: auto` 自动中心对称镜像，雷达突发丢包 30%）：敌方突入基地防区达到紧急阈值，立即抢占回防拦截。</sub> |
+| **低血撤退（`RECOVER · LOW_RESOURCES`）** | **雷达缺失时保守决策（`DEFEND · AREA_UNCOVERED`）** |
+| ![低血撤退](docs/media/low-hp-retreat.gif)<br><sub>变体 `rl_r0`（红方 7 号）：交火后自身血量跌破阈值触发强制恢复锁存，跳过普通防抖返回己方补给区直至回血脱离退出阈值。</sub> | ![雷达缺失时保守决策](docs/media/radar-missing.gif)<br><sub>变体 `rule_r60`（红方 7 号，雷达突发丢包 60%）：外部敌我位置成片中断期间，自动抬高核心防区紧迫度收缩稳守关键通道。</sub> |
+
+> **画面图例**：黄圈标注的己方圆点 = SentryWeave 控制的哨兵（红方 `7` 号 / 蓝方 `107` 号）；实心圆 = 场地实时存活机器人；空心圆 = 哨兵内部 `WorldModel` 当前跟踪/衰减保留的敌方轨迹；`×` 与虚线 = 当前下发的合法目标点；顶栏实时叠加当前 `TaskType`、`reason_code`、仲裁结果与雷达视野完整度。
+
+### 雷达随机成片丢失（`0% / 30% / 60% / 100%`）闭环行为摘要
+
+固定 10 个随机种子（`42..51`）× 红蓝换边（每变体 `20` 局，含对照组共 `180/180` 局完赛，单局 `420 s`，平均持续 `3.0 s` 的成片雷达中断 + `0.15 m` 噪声 + `0.2 s` 延迟；完整数据表含 `reference` 对照见 [实验基线](docs/benchmarks.md)）：
+
+| 变体 | 完赛局数 | 雷达在线率 | 敌 / 友位置完整度 | 存活率 | 造成伤害 | `HOLD` | `INTERCEPT` | `DEFEND` | `RECOVER` | RL 参与率 | 策略异常 / 超时 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `rule_r0`（0% 丢包） | 20/20 | 100% | 42% / 100% | 63 ± 9% | 380 ± 249 | 50% | 12% | 19% | 19% | — | 0 |
+| `rule_r30`（30% 丢包） | 20/20 | 69% | 30% / 75% | 64 ± 6% | 473 ± 285 | 47% | 10% | 23% | 21% | — | 0 |
+| `rule_r60`（60% 丢包） | 20/20 | 41% | 22% / 52% | 65 ± 7% | 587 ± 327 | 44% | 7% | 29% | 20% | — | 0 |
+| `rule_r100`（100% 全盲） | 20/20 | 0% | 0% / 0% | 74 ± 9% | 950 ± 371 | 28% | 0% | 51% | 21% | — | 0 |
+| `rl_r0`（`blend=0.25`） | 20/20 | 100% | 42% / 100% | 65 ± 9% | 561 ± 257 | 44% | 12% | 22% | 21% | 44% | 0 |
+| `rl_r30`（`blend=0.25`） | 20/20 | 69% | 32% / 74% | 62 ± 10% | 571 ± 271 | 46% | 9% | 25% | 19% | 31% | 0 |
+| `rl_r60`（`blend=0.25`） | 20/20 | 41% | 21% / 52% | 63 ± 9% | 710 ± 365 | 44% | 6% | 30% | 20% | 21% | 0 |
+| `rl_r100`（`blend=0.25`） | 20/20 | 0% | 0% / 0% | 74 ± 9% | 950 ± 371 | 28% | 0% | 51% | 21% | 0% | 0 |
+
+- 随着雷达丢包率由 `0% → 30% → 60% → 100%` 升高，`DEFEND` 驻防时间占比在规则组（`19% → 23% → 29% → 51%`）与 RL 混合组（`22% → 25% → 30% → 51%`）均单调上升，主动拦截 `INTERCEPT` 从 `12%` 收敛至 `0%`；RL 参与率同步按 `44% → 31% → 21% → 0%` 平滑退坡，全盲 `rl_r100` 自动退化为与 `rule_r100` 完全一致的保守防守，全量 180 局 **0 策略异常、0 超时、0 贴墙起点锁死**。
+- **录制环境与许可证隔离声明**：上述俯视 GIF 与批量实验在作者本机单独安装的 [`RM-Arena/Arena-1`](https://github.com/RM-Arena/Arena-1)（`v0.8.0-beta.2`，提交 `e70c1f010edf`，适用 Arena-1 非商业学习许可证 1.0）中基于回放轨迹自绘生成；**Arena-1 源码、地图资产及原始对局回放不随本 Apache-2.0 仓库分发**。`rl_*` 模型训练自 RMUC 2026 公开日志并跨赛季迁移至 2027 场地，结果仅反映仿真环境内的相对行为与工程稳定性，不代表真实比赛胜率。
+
+---
+
+## 机载性能与资源占用
+
+车端决策核心与离线强化学习推理仅依赖 **`numpy` + `PyYAML`**，无需安装 PyTorch、CUDA 或占用自瞄 GPU。下图由 [`tools/plot_benchmarks.py`](tools/plot_benchmarks.py) 直接读取 [`benchmarks/decision-latency.json`](benchmarks/decision-latency.json) 与 [`benchmarks/runtime-footprint.json`](benchmarks/runtime-footprint.json) 纯数据驱动渲染：
+
+![SentryWeave 机载性能与资源占用](docs/assets/performance.png)
+
+| 实测维度（Python 3.12.3 · NumPy 2.5.4 · x86_64） | 场地 / 模型规模 | 关键耗时指标 | CPU / 内存 / 产物体积 |
+|---|---|---|---|
+| `DecisionEngine.step` 单步耗时（`rmuc2027`） | 28×15 m · 77 障碍/禁区 · 149 可见图角点 | `p50 = 2.44 ms` · `p95 = 16.50 ms` · `mean = 6.08 ms` · `max = 40.80 ms`（建图 `119.28 ms`） | `2 Hz`（`500 ms` 预算）纯核心单核 CPU **1.22%** · Python 峰值堆内存 **3.70 MiB** |
+| `DecisionEngine.step` 单步耗时（`rmuc2026`） | 28×15 m · 62 障碍/禁区 · 113 可见图角点 | `p50 = 2.40 ms` · `p95 = 9.82 ms` · `mean = 3.92 ms` · `max = 24.20 ms`（建图 `44.58 ms`） | `2 Hz` 纯核心单核 CPU **0.79%** · Python 峰值堆内存 **2.04 MiB** |
+| `DecisionEngine.step` 单步耗时（`demo`） | 20×12 m · 1 障碍 · 4 可见图角点 | `p50 = 1.18 ms` · `p95 = 1.77 ms` · `mean = 1.25 ms` · `max = 2.17 ms`（建图 `0.29 ms`） | `2 Hz` 纯核心单核 CPU **0.25%** · Python 峰值堆内存 **1.27 MiB** |
+| 纯 NumPy 策略前向推理（`BC / IQL`） | MLP `73 → 128 → 128 → 2`（`float32`） | P 核 **5.9 μs** · E 核 **16.7 μs** | 导出模型 `actor.json` **535 KB** · 零深度学习框架依赖 |
+| 纯 NumPy 策略前向推理（`Decision Transformer`） | `context=8`, 2 层因果自注意力 | P 核 **0.29 ms** (`290 μs`) · E 核 **0.73 ms** (`730 μs`) | 导出模型 `actor.json` **2.8 MB** (`2867.2 KiB`) · 零深度学习框架依赖 |
+| ROS 2 Jazzy `decision` 在线节点（`2 Hz`） | 含 `rclpy` 定时器、`WorldState` 解码、决策与 JSONL 轨迹写入 | 周期稳定 `500 ms` | 单核 CPU **3.2%–3.7%** · 常驻内存 RSS **72–80 MB** |
+
+在本机复现单步耗时基准并重新生成性能图：
+
+```bash
+.venv/bin/python tools/benchmark_decision.py --out benchmarks/decision-latency.json
+.venv/bin/python tools/plot_benchmarks.py
+```
+
+---
+
+## 与现有开源 RoboMaster 哨兵决策 / 强化学习项目对比
+
+下表基于公开仓库源码、配置文件与文档核验整理，仅陈述可从代码核实的工程边界差异：
+
+| 项目 | 许可与定位 | 1. 决策范式 | 2. 雷达 / 裁判缺失处理 | 3. 导航解耦与接口 | 4. 场地参数化与校验 | 5. 机载部署依赖与开销 |
+|---|---|---|---|---|---|---|
+| **SentryWeave**（本项目） | Apache-2.0 · ROS 2 Jazzy / 纯 Python 哨兵协同决策与离线 RL | 规则效用 + 防抖租约/紧急抢占 + 可选 HMM 意图 + 离线 RL（BC / IQL / DT）路线混合与非紧急 `SUPPORT`/`DEFEND` 区域内子目标细化（绝不篡改规则选出的任务类型，含 `rl_blend=0` 影子模式） | 逐字段 `*_valid` 有效位与源时间戳；未知不作 0 或满值；陈旧敌方轨迹置信度线性衰减并抬高核心防区权重；按位置完整度自动缩减直至关闭 RL 权重，输出 `missing_info` 审计 | 强类型多源输入（兼容旧 `RefereeState`）+ 纯 Python `DecisionEngine.step(World)`；支持 Nav2 Action、`PoseStamped` 话题桥接或直接订阅 `TacticalTask` | 独立 YAML 场地语义（凸多边形障碍/禁区、建筑、补给区、区域、非白名单偏好点）+ 每周期动态候选点 + `mirror: auto` 红蓝换算 + `sentry-field` 校验 CLI + 自动生成 Nav2 `KeepoutFilter` 掩码 | **车端仅需 NumPy + PyYAML**（无 GPU / PyTorch / CUDA）：BC/IQL 5.9 μs（535 KB），DT 0.29 ms（2.8 MB）；RMUC 2027 单步 p50 2.44 ms，2 Hz 节点单核 3.2%–3.7%、RSS 72–80 MB |
+| [**PolarBear** `pb2025_sentry_behavior`](https://github.com/SMBU-PolarBear-Robotics-Team/pb2025_sentry_behavior) + [`pb2025_sentry_nav`](https://github.com/SMBU-PolarBear-Robotics-Team/pb2025_sentry_nav) | Apache-2.0 · ROS 2 Humble 哨兵导航与行为树 | `BehaviorTree.CPP` 4.6.2 XML 规则行为树 + 代价图 36 扇区攻击点采样（`CalculateAttackPose`），无意图学习或 RL 模块 | 裁判与视觉回调直接覆盖写入 `GlobalBlackboard`；条件节点仅检查键是否收到过消息，无逐字段有效位、超时淘汰或雷达掉线降级 | 依赖本队 `pb_rm_interfaces`（v1.7.0）与 `auto_aim_interfaces`，配套 `pb2025_sentry_nav`；因上游 `BehaviorTree.ROS2` `halt()` 问题示例树改发 `goal_pose` 话题 | 巡逻/补给坐标以 `"4.65;-3.5;0"` 字符串写在 BT XML 节点属性中，无独立场地语义 YAML、`mirror: auto` 或静态场地校验工具 | C++ 编译节点，CPU 开销低、无神经网络依赖；需 `vcstool` 拉取源码编译定制 `BehaviorTree.ROS2` 与全套自定义接口包 |
+| [**SCURM** `SCURM_SentryNavigation`](https://github.com/PolarisXQ/SCURM_SentryNavigation)（[`rm_decision_cpp`](https://github.com/PolarisXQ/SCURM_SentryNavigation/tree/master/rm_decision_cpp)） | 源码公开（子包各自许可）· ROS 2 Humble 整车导航决策栈 | 修改版 `BehaviorTree.CPP` 规则行为树（区域追击、多条件补给选择），无意图估计或 RL | 读取仓库内 `rm_interfaces` 与自瞄消息，假定状态按协议更新，无逐字段有效位、陈旧衰减或完整度降级 | 单仓库紧耦合修改版 `FAST_LIO` 重定位、地形分析、Livox 驱动、`cmd_chassis` 与本队通讯协议 | 点位与区域判断随行为树 XML / C++ 配置维护，无独立多边形场地语义、`mirror: auto` 或场地校验 CLI | 原生 C++ 运行（仓库报告定位+地形+Nav2+决策在 NUC12 总占用约 30%），无深度学习运行时 |
+| [**DJI `RoboRTS`** `roborts_decision`](https://github.com/RoboMaster/RoboRTS)（及 ROS 2 移植 [`tars_sentry_decision`](https://github.com/TARS-Go-Nav/tars_sentry_decision)） | GPL-3.0 · ROS 1 Kinetic（移植版 ROS 2 Humble）经典行为树 | 自研 C++ 头文件行为树 + `Blackboard`（巡逻、追击、逃跑、补给），无学习/RL 策略 | `Blackboard` 缓存最新回调，未区分字段未知/过期与零值，无雷达掉线置信度衰减 | 上游绑定 `roborts_msgs` / `roborts_planning`；ROS 2 移植版接 Nav2 但内置绑定本队 `tars_msgs/SerialReceive` 串口消息 | 在 `decision.prototxt` 或 `rmuc_map.xml` 枚举固定坐标点，换边或换赛季需手工改写坐标 | 原生 C++ 节点，CPU/内存开销极低，无机器学习依赖 |
+| [**CASIA Neurons** `RMAI2020-Decision`](https://github.com/DRL-CASIA/RMAI2020-Decision) | MIT · ROS 1 Kinetic ICRA 2v2 行为树与多智能体 RL | `roborts_decision` 行为树 **或** 71 维输入 → FC-LSTM → 16 离散动作 A3C 模型直接选固定巡逻点/敌方目标，无规则效用包络、防抖租约或影子模式 | 敌/友采用二值可见位并将缺失槽位填 `0.0`，自身与友方血量/弹量无有效位或超时降级 | 紧耦合 ROS 1 `RoboRTS` 的 `Blackboard`、`CostMap2D` 与 `ChassisExecutor` | `nn_behavior.h` 硬编码 8×5 m 中心偏移与 `prototxt` 固定 10 个巡逻点槽位，改点位数即改变动作维度 | 需机载配备 Jetson Xavier 并源码编译安装 PyTorch C++（`libtorch` 1.1.0）与 CUDA/cuDNN |
+| [**BNBU Navigator** `RMUC-OfflineRL`](https://github.com/Harkerbest/RMUC-OfflineRL) | MIT（仅代码）· Python + PyTorch 官方日志离线 RL 框架 | 基于 613 局 RMUC 2026 公开裁判日志的 1 Hz 全兵种离线 RL（IQL / BC / DT，161 维状态 → 位移 + 开火 + 选敌），配 `apply_safety` 步长/热量/外框裁剪；不含在线任务仲裁或动态候选生成 | 默认读取 161 维全量裁判日志特征（含敌方血量、等级档位、经济、经验交火图；支持离线可见半径遮罩），无在线异步消息超时或按完整度回退规则 | 纯 Python `MLPPolicyRunner.step(obs_161)`，不含 ROS 2 消息、TF 世界模型、Nav2 Action 状态机或底盘速度门控 | 固定 RMUC 2026 28×15 m 外框裁剪与蓝方 180° 镜像，不含场地内部多边形障碍/禁区语义或连通可达投影 | 在线推理依赖 PyTorch（`torch.load` 加载 `best.pt`，支持 CUDA 或 CPU） |
+| [**RM-Arena** `Arena-1`](https://github.com/RM-Arena/Arena-1) + [`Arena-RL`](https://github.com/RM-Arena/Arena-RL) | Arena-1 非商业学习许可 1.0（禁商用）· Rust + Python 仿真与分层 PPO | RMUC 2027/2026 物理仿真平台、`VectorArena` 并行环境，以及 10 Hz 低层技能 PPO + 1 Hz 高层 PPO / 外部 LLM 指挥 | 模拟器内置局部相机视线限制与短时目标记忆，不面向实车裁判串口 + 雷达站异步缺失融合 | 仿真器专用 Python SDK（`act(obs, state)`、`sdk.navigate`）与 Gymnasium / JSONL 协议，无 ROS 2 / Nav2 实车接口 | 地图几何内置于 Rust 模拟器规则配置（`config/rules.json`），不面向外部实车地图提供自定义 YAML 场地语义与禁区掩码生成 | 需 Rust 仿真引擎 + PyTorch / Stable-Baselines3（LLM 模式需外部 API），非商业许可证限制直接并入 Apache-2.0 工程 |
+
+**边界说明与致谢**：
+- **上下层互补而非替代**：`pb2025_sentry_nav`、`SCURM_SentryNavigation` 以及 [`CSU-RM-Sentry`](https://github.com/baiyeweiguang/CSU-RM-Sentry) 等优秀开源工程的核心贡献在于激光里程计（Point-LIO / FAST-LIO2）、重定位、地形分割与全向局部控制；SentryWeave 不实现激光 SLAM 或底盘控制器，而是专门提供上层“残缺信息融合 → 可解释协同战术仲裁 → 安全目标租约与速度门控”，可直接架设在这些底层导航栈之上。
+- **离线强化学习上游关系与实事求是的结论**：本项目的官方日志导入与离线 RL 训练方法致谢并参考了 [`Harkerbest/RMUC-OfflineRL`](https://github.com/Harkerbest/RMUC-OfflineRL)，针对机载实车做了三项工程改造：① 将观测收缩为机载/雷达可合法获取的 73 维特征（剔除敌方血量、经济、回溯朝向等特权字段）；② 导出经数值一致性测试的纯 NumPy `actor.json` 移除车端 PyTorch 依赖；③ 放入“规则选任务 + 非紧急区域内微调 + 缺失自动降权/影子模式”的安全包络中。与上游独立评估结论一致，当前基于公开日志的离线 IQL / DT 尚未在闭环胜率上证明显著优于规则/BC，SentryWeave 的核心工程收益在于**零非法目标、雷达 0%–100% 掉线平稳降级以及 `rl_blend=0` 零风险上车采集影子数据**。
+
+---
+
+## 场地语义参数化与红蓝自动镜像
+
+SentryWeave 将“场地哪里是什么”与“机器人可以走到哪里”严格分离，内置三套可直接使用的配置：
+- **RMUC 2027 默认赛场**（28×15 m，75 凸障碍 + 2 规则禁区）：[`tactics_rmuc2027.yaml`](src/sentry_bringup/config/tactics_rmuc2027.yaml) + [`field_rmuc2027.yaml`](src/sentry_bringup/config/field_rmuc2027.yaml)
+- **RMUC 2026 赛场**（28×15 m，60 凸障碍 + 2 规则禁区）：[`tactics_rmuc2026.yaml`](src/sentry_bringup/config/tactics_rmuc2026.yaml) + [`field_rmuc2026.yaml`](src/sentry_bringup/config/field_rmuc2026.yaml)
+- **轻量参考演示场**（20×12 m）：[`tactics.yaml`](src/sentry_bringup/config/tactics.yaml)
+
+核心能力：
+1. **语义不锁死移动空间**：场地文件中的 `points` 只是可选偏好点而非白名单；每周期根据友军推进、敌方突袭与区域几何，在连通自由空间内动态生成拦截、扇形布防、侧后支援、控区与补给恢复候选点，并可自动生成 Nav2 `KeepoutFilter` 规则禁区掩码。
+2. **`mirror: auto` 红蓝一键切换**：只需以红方视角编写一份场地文件，传入 `own_team:=BLUE` 时自动绕场地中心 180° 镜像所有几何语义与禁区掩码，并自动推导哨兵官方编号（`RED -> 7`、`BLUE -> 107`）。离线 RL 通过 `rl_mirror:=auto` 红蓝通用；可选 HMM 意图模型与效用权重若遇到镜像后 `map_fingerprint` 不一致，不会中断节点，而是自动安全回退至规则模式并记入 `policy_info.model_fallbacks`。
+3. **上车前静态几何与连通性校验 CLI（`sentry-field`）**：一键校验凸多边形合法性、建筑完整性、中心对称公差以及所有区域/偏好点在 `0.1 m` 膨胀自由栅格上的四连通可达性。
+
+---
+
+## 快速开始
+
+支持环境为 **Ubuntu 24.04、Python 3.12、ROS 2 Jazzy**。纯 Python 决策、场地校验与离线学习无需安装 ROS；Docker 镜像已内置完整 ROS 2 Jazzy 与测试环境。**官方赛事数据库、训练权重与预构建镜像不随源码分发**，均通过下方命令可复现生成。
+
+### 1. 纯 Python 场地校验与轻量仿真回放（无需 ROS / GPU）
 
 ```bash
 git clone https://github.com/yelle233/SentryWeave.git
 cd SentryWeave
-```
 
-支持环境为 **Ubuntu 24.04、Python 3.12、ROS 2 Jazzy**。
-纯 Python 决策与训练不需要安装 ROS；Docker 路线包含 Jazzy 与 Nav2 运行依赖。
-
-仓库发布源码、配置、测试和汇总实验指标。**官方数据库、训练权重及预构建镜像不随源码分发**，
-分别通过下载脚本、训练命令和 Dockerfile 生成。
-
-## 快速开始：不依赖模型的决策演示
-
-```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 .venv/bin/python -m pytest tests -q
 
+# 同时校验 RMUC 2027 / 2026 红蓝双边场地几何、镜像一致性与自由空间连通性
+.venv/bin/sentry-field src/sentry_bringup/config/tactics_rmuc2027.yaml --own-team RED
+.venv/bin/sentry-field src/sentry_bringup/config/tactics_rmuc2027.yaml --own-team BLUE
+
+# 运行进攻机会与基地威胁并存的轻量运动学场景并回放决策轨迹
 .venv/bin/sentry-train simulate \
   --scenario conflict --seed 101 --duration 30 \
   --trace artifacts/demo/conflict.jsonl
 .venv/bin/sentry-train replay --trace artifacts/demo/conflict.jsonl
 ```
 
-该示例展示进攻机会与防区威胁同时存在时的任务选择。
-输出包含任务序列、覆盖指标、切换次数和执行结果；没有 ROS 的环境会明确跳过 ROS 专用测试。
+### 2. 启动 ROS 2 Jazzy 决策链与接入自有导航栈
 
-## 接入 ROS 2 决策链
-
-在仓库根目录构建镜像，启动世界模型、决策、执行器和速度门控：
+构建容器镜像（或在本机已安装 Jazzy 工作区执行 `colcon build --symlink-install && source install/setup.bash`）：
 
 ```bash
 docker build -t sentryweave:main -f docker/Dockerfile .
+
+# 方式一（默认）：对接标准 Nav2 Action，内置 executor 独占目标生命周期 + velocity_guard 门控 nav_cmd_vel -> cmd_vel
+# 默认加载 RMUC 2027 配置；传 own_team:=BLUE 自动完成 180° 场地镜像并推导 self_id=107
 docker run --rm -it sentryweave:main bash tools/ros_exec.bash \
-  ros2 launch sentry_bringup decision.launch.py
+  ros2 launch sentry_bringup decision.launch.py own_team:=BLUE
+
+# 方式二 / 三：关闭内置 Nav2 执行器与速度门控，对接自有 PoseStamped 规划器或直接订阅 /sentry/tactical/task
+docker run --rm -it sentryweave:main bash tools/ros_exec.bash \
+  ros2 launch sentry_bringup decision.launch.py \
+  own_team:=RED enable_executor:=false enable_velocity_guard:=false
 ```
 
-本机已安装 Jazzy 与 Nav2 时，也可 source `/opt/ros/jazzy/setup.bash` 后执行
-`colcon build --symlink-install`，再 source `install/setup.bash` 运行同一 launch。
+若外部 Nav2 未开放 `compute_path_to_pose` 或全局代价图膨胀半径小于 `robot_radius`，可在方式一附加 `check_path_before_navigate:=false` 跳过发单前路径预检（目标点合法性与禁区掩码依然生效）。完整接线表、`PoseStamped` 桥接节点代码与排障清单见 [接入自有导航栈指南](docs/navigation-integration.md) 与 [实车上车教程](docs/real-robot.md)。
 
-决策链不包含定位、感知和导航；未接入输入时任务保持 HOLD，运动许可为 false。
-接入自己的导航栈时，需要提供 Nav2 Action、`perception/tracks`、`referee/state` 和 TF，
-并把导航速度接到 `nav_cmd_vel`，由速度门控独占 `cmd_vel`。接线方法见 [部署指南](docs/deployment.md)。
+### 3. 训练离线强化学习策略与影子模式上车
 
-## 训练离线强化学习策略
-
-训练环境与 ROS 系统 Python 分开。以下 CUDA 示例适用于兼容 CUDA 12.8 的 NVIDIA 环境；
-CPU 安装方式见 [入门教程](docs/getting-started.md)。
+离线训练使用独立虚拟环境 `.venv-rl`（以下为 CUDA 12.8 示例，CPU 安装见 [入门教程](docs/getting-started.md)，完整算法与 FQE 说明见 [离线强化学习](docs/offline-rl.md)）：
 
 ```bash
 python3 -m venv .venv-rl
@@ -115,69 +258,60 @@ python3 -m venv .venv-rl
   --init-actor artifacts/rl/runs/bc-seed7/actor.json \
   --steps 30000 --batch-size 512 --seed 7 --device auto \
   --out artifacts/rl/runs/iql-seed7
-```
 
-训练输出 `actor.json`、safetensors 参数、配置和日志。
-构建数据集或训练到已有完成目录时会拒绝覆盖，请使用新输出目录保存新实验。
-
-独立评测：
-
-```bash
 .venv-rl/bin/sentry-rl evaluate \
   --data artifacts/rl/dataset \
   --actors artifacts/rl/runs/bc-seed7/actor.json artifacts/rl/runs/iql-seed7/actor.json \
   --out artifacts/rl/evaluation
 ```
 
-完成训练后，在决策链中加载模型：
+将导出的纯 NumPy `actor.json` 挂载到无 PyTorch 的车端运行镜像（默认 `tactics_rmuc2027.yaml` 同为 28×15 m 场地，无需开启 `rl_allow_transfer`；建议先以 `rl_blend:=0.0` 影子模式上车验证，再切 `rl_blend:=0.25` 受约束混合；仅在 20×12 m 演示配置 `tactics.yaml` 上实验时需另传 `rl_allow_transfer:=true`）：
 
 ```bash
 docker run --rm -it \
   -v "$PWD/artifacts:/ws/artifacts" \
   sentryweave:main bash tools/ros_exec.bash \
   ros2 launch sentry_bringup decision.launch.py \
+  own_team:=RED \
   rl_model:=/ws/artifacts/rl/runs/iql-seed7/actor.json \
-  rl_blend:=0.25 rl_allow_transfer:=true
+  rl_blend:=0.0 rl_mirror:=auto \
+  trace_path:=/ws/artifacts/live/shadow.jsonl
 ```
 
-`rl_allow_transfer` 显式允许将官方数据的 28×15 m 模型用于 20×12 m 参考场地。
-这验证集成与约束，不代表正式赛场性能。`rl_blend:=0.0` 为影子模式：记录模型建议，
-任务仍由规则策略选择，规则策略仍可能驱动机器人。
+---
 
-DT、分组验证、FQE 和回放方法见 [离线强化学习](docs/offline-rl.md)。
-
-## 项目目录
+## 项目目录与文档索引
 
 ```text
 SentryWeave/
 ├── src/
-│   ├── sentry_core/         # ROS 无关的状态、策略、模型推理和执行协议
-│   ├── sentry_training/     # HMM / BC / IQL / DT、评测与回放
-│   ├── sentry_interfaces/   # ROS 消息
-│   ├── sentry_ros/          # TF、QoS、节点和 Nav2 Action 适配
-│   └── sentry_bringup/      # launch、参数、导航行为树
-├── tests/                  # 单元与 ROS Action 集成测试
-├── tools/                  # 加载 Jazzy 与工作区环境后执行命令
-├── integrations/           # 固定上游版本与许可信息
-├── benchmarks/             # 可公开的实验汇总，不含原始比赛轨迹
-├── docs/                   # 开发者与部署文档
-├── docker/                 # Jazzy 运行环境
-└── .github/                # CI 与协作模板
+│   ├── sentry_core/         # 零 ROS 依赖的多源融合、缺失降级、动态候选、效用仲裁、纯 NumPy 推理与场地校验
+│   ├── sentry_training/     # HMM / BC / IQL / DT 离线训练、评测、轻量运动学仿真与轨迹回放
+│   ├── sentry_interfaces/   # 强类型战术输入输出 ROS 2 消息定义
+│   ├── sentry_ros/          # 世界模型、决策、Nav2 执行器与单调时钟速度门控节点
+│   └── sentry_bringup/      # Launch 启动开关、RMUC 2027/2026 场地语义与战术配置、Nav2 参考配置
+├── tests/                   # 核心单元、缺失信息矩阵、场地校验、图表数据驱动、文档完整性与 ROS 集成测试
+├── tools/                   # ROS 环境包装、单步决策耗时基准测试与纯数据驱动性能绘图脚本
+├── benchmarks/              # 机器可读的离线评测、单步耗时与机载开销汇总 JSON（不含原始对局回放）
+├── integrations/            # 上游参考版本固定与许可证记录
+├── docs/                    # 接口规范、自有导航接入、实车教程、架构、实验与动图资产
+└── docker/                  # ROS 2 Jazzy 构建与测试镜像
 ```
 
-`artifacts/`、`third_party/`、虚拟环境和 colcon 构建产物在运行时生成，不进入版本控制。
+| 分类 | 文档入口 | 内容概要 |
+|---|---|---|
+| 上手与实车接入 | [入门教程](docs/getting-started.md) | 环境搭建、纯 Python 仿真、离线训练、Docker Jazzy 运行与在线回放全流程 |
+| 上手与实车接入 | [开放输入输出接口与缺失降级规范](docs/interfaces.md) | 全部输入输出消息逐字段契约、`RELIABLE` QoS 红线、有效位差异、定量缺失降级与桥接代码 |
+| 上手与实车接入 | [接入自有导航栈指南](docs/navigation-integration.md) | Nav2 Action、`PoseStamped` 话题桥接、直接消费 `TacticalTask` 三种接线模式、TF/小陀螺约定与排障清单 |
+| 上手与实车接入 | [实车上车教程](docs/real-robot.md) | 赛季场地标定与 `sentry-field`、台架掉线演练、四阶段安全上车（低速规则→影子模式→混合→双边校验）与日志体检 |
+| 设计与算法 | [系统架构](docs/architecture.md) | 模块边界、双时钟隔离、动态候选点生成、防抖状态机与执行器所有权协议 |
+| 设计与算法 | [离线强化学习](docs/offline-rl.md) | RMUC 2026 官方日志管线、73 维合法观测、BC / IQL / DT 训练、纯 NumPy 导出与只细化安全包络 |
+| 设计与算法 | [学习基线](docs/baselines.md) | 可解释六维规则效用、队友意图 HMM 拟合、闭环效用权重调优与双边 `map_fingerprint` 说明 |
+| 运维与参考 | [部署指南](docs/deployment.md) | 节点参数速查、命名空间与 TF 重映射、禁区掩码生成及故障复位参考 |
+| 运维与参考 | [实验基线](docs/benchmarks.md) | 独立轨迹测试、FQE、受约束闭环、机载单步耗时/内存基准与 Arena-1 RMUC 2027 雷达掉线对照实验 |
+| 运维与参考 | [参考资料](docs/references.md) | 相关论文、ROS 2 / Nav2 官方文档与上游参考索引 |
 
-## 文档
-
-| 主题 | 入口 |
-|---|---|
-| 从首次克隆开始训练与运行 | [入门教程](docs/getting-started.md) |
-| 数据流、决策与执行协议 | [系统架构](docs/architecture.md) |
-| BC / IQL / DT 与官方数据 | [离线强化学习](docs/offline-rl.md) |
-| 规则、HMM、效用权重与标注 | [学习基线](docs/baselines.md) |
-| ROS 接口、TF、实车参数 | [部署指南](docs/deployment.md) |
-| 实验结果与解释边界 | [实验基线](docs/benchmarks.md) |
-| 官方文档与论文 | [参考资料](docs/references.md) |
+---
 
 ## 开发与贡献
 
@@ -186,20 +320,15 @@ SentryWeave/
 .venv/bin/python -m pytest tests -q
 ```
 
-离线学习测试需要 `.[rl]`，ROS 测试需要已构建并 source 的 Jazzy 工作区。
-CI 分别检查纯 Python、CPU PyTorch 和 Jazzy。
-
-欢迎提交 [Issue](https://github.com/yelle233/SentryWeave/issues) 或 Pull Request。
-开发环境、提交范围与验证要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+离线学习训练测试需安装 `.[rl]`，ROS 2 集成测试需在已构建并 source 的 Jazzy 工作区（或 `sentryweave:main` 容器）中运行；GitHub Actions CI 分别验证纯 Python 核心、CPU PyTorch 训练与 ROS 2 Jazzy 容器全量套件。欢迎提交 [Issue](https://github.com/yelle233/SentryWeave/issues) 或 Pull Request，开发规范与提交要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证与致谢
 
-源码使用 [Apache License 2.0](LICENSE)。
-第三方源码、场地、比赛数据和商标的适用范围见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本项目源码采用 [Apache License 2.0](LICENSE) 开源许可证发布。第三方源码参考、赛事场地、公开数据集与商标权利说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 项目参考并感谢：
 
-- [Navigator Team · RMUC-OfflineRL](https://github.com/Harkerbest/RMUC-OfflineRL)
-- [Navigation2](https://github.com/ros-navigation/navigation2)
+- [BNBU Navigator Team · RMUC-OfflineRL](https://github.com/Harkerbest/RMUC-OfflineRL)
+- [ROS 2 Navigation2 (Nav2)](https://github.com/ros-navigation/navigation2)
 
 SentryWeave 是独立项目，不代表 RoboMaster 官方规则、认证或背书。

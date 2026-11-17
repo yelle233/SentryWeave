@@ -81,7 +81,7 @@
 
 | 字段 | 类型 / 常量 | 有效位与约束 | 语义与易错陷阱 |
 |---|---|---|---|
-| `stamp` | `builtin_interfaces/Time` | `0 <= now - stamp <= robot_status_timeout`（默认 `2.0 s`） | 该机器人状态的原始采样时刻 |
+| `stamp` | `builtin_interfaces/Time` | `-0.05 <= now - stamp <= robot_status_timeout`（默认 `2.0 s`） | 该机器人状态的原始采样时刻 |
 | `robot_id` | `uint16`（`1..65535`） | 必填 | **官方机器人编号**：红方 `1, 3, 4, 6, 7`（含工程 `2` 等），蓝方 `101, 103, 104, 106, 107`（含 `102` 等）。当战术文件省略 `self_id` 时，系统按 `own_team` 自动推导 **`RED -> 7`、`BLUE -> 107`** |
 | `team` | `uint8`（`UNKNOWN=0`, `ALLY=1`, `ENEMY=2`） | 必须为 `ALLY` 或 `ENEMY` | **陷阱 1（相对阵营）**：表示**相对本车的敌我关系**（友军恒为 `ALLY=1`，敌军恒为 `ENEMY=2`），**绝不是红方=1 / 蓝方=2**！当本车为蓝方 `107` 时，蓝方队友 `101/103` 必须填 `ALLY=1`，红方对手 `1/3/7` 必须填 `ENEMY=2`。`UNKNOWN=0` 或同一 `robot_id` 前后改变 `team` 会被拒绝 |
 | `hp` | `float64`（`>= 0`） | `hp_valid` (`bool`) | **陷阱 2（独立的有效位）**：`hp_valid` **仅管辖 `hp`**！只知当前血量不知上限时置 `hp_valid=true, max_hp_valid=false`，内核仍保留 `hp`；当 `alive_valid=false` 时会由 `hp > 0` 推导存活（因此 `hp=0` 能准确判定阵亡）。**未知血量必须置 `hp_valid=false`，切勿填 `hp=0, hp_valid=true`** |
@@ -97,7 +97,7 @@
 
 | 字段 | 类型 / 常量 | 有效位与约束 | 语义与易错陷阱 |
 |---|---|---|---|
-| `stamp` | `builtin_interfaces/Time` | `0 <= now - stamp <= structure_timeout`（默认 `5.0 s`） | 该建筑状态的原始采样时刻 |
+| `stamp` | `builtin_interfaces/Time` | `-0.05 <= now - stamp <= structure_timeout`（默认 `5.0 s`） | 该建筑状态的原始采样时刻 |
 | `id` | `string`（`1..64` 字符） | 必填 | 标准名称为 `"own_base"`、`"own_outpost"`、`"enemy_base"`、`"enemy_outpost"`，也可使用场地文件 `structures` 段声明的自定义结构名 |
 | `hp`, `max_hp` | `float64`（`hp >= 0`, `max_hp > 0`） | **`hp_valid` (`bool`，同时管辖两者)** | **陷阱 3（与 `RobotStatus` 不同！）**：`StructureState.msg` 只有一个 `hp_valid`，**同时覆盖 `hp` 与 `max_hp`**。编码 `hp_valid=true` 时必须保证 `hp >= 0` 且 `max_hp > 0`（若填 `max_hp=0` 且 `hp_valid=true`，整条消息会被 `WorldModel` 拒绝！）。若仅知建筑存活与否或不知 `max_hp`，请置 `hp_valid=false` 并填写 `alive` + `alive_valid=true`，或按当季规则手册一并填入满血 `max_hp` |
 | `alive` | `bool` | `alive_valid` (`bool`) | 建筑是否存活；`alive_valid=false` 时若 `hp_valid=true` 则按 `hp > 0` 推导，否则为 `None`（“存活但未确认”） |
@@ -110,7 +110,7 @@
 
 | 字段 | 类型 / 常量 | 有效位与约束 | 语义与坐标转换规则 |
 |---|---|---|---|
-| `header` | `std_msgs/Header` | `frame_id` 非空；`0 <= now - stamp <= predicted_age`（默认 `0.9 s`） | **采集时刻 TF 查询**：若 `header.frame_id != config.frame`（默认 `"map"`），`world_model` 严格按**采集时刻 `header.stamp`** 查询 TF；若该时刻变换不可用，**直接丢弃该观测，绝不静默回退到最新 TF**！同一目标观测时间戳必须严格递增 |
+| `header` | `std_msgs/Header` | `frame_id` 非空；`-0.05 <= now - stamp <= predicted_age`（默认 `0.9 s`） | **采集时刻 TF 查询**：若 `header.frame_id != config.frame`（默认 `"map"`），`world_model` 严格按**采集时刻 `header.stamp`** 查询 TF；若该时刻变换不可用，**直接丢弃该观测，绝不静默回退到最新 TF**！同一目标观测时间戳必须严格递增 |
 | `robot_id` | `uint16`（`1..65535`） | 必填 | 阵营内稳定身份 ID。**本机保护**：若 `team == ALLY` 且 `robot_id == self_id`，`world_model` 自动忽略该条目，外部雷达绝不覆盖本机定位权威 |
 | `team` | `uint8`（`UNKNOWN=0`, `ALLY=1`, `ENEMY=2`） | 必须为 `ALLY` 或 `ENEMY` | 相对本车的敌我关系（同 `RobotStatus.team`） |
 | `pose` | `geometry_msgs/PoseWithCovariance` | `(x, y)` 有限且位于场地 `bounds` 内 | 世界平面位置。若相邻两帧位移超过 `max_speed * dt + jump_slack`（默认 `6.0 * dt + 0.6 m`），首次跳变被暂存拒绝，需新位置处第二帧一致观测确认后才重建轨迹并递增 `generation` |

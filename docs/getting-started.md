@@ -309,7 +309,7 @@ docker run --rm -it --name sentryweave-decision \
 ```
 
 宿主机 `artifacts/...` 在容器中对应 `/ws/artifacts/...`。
-日志出现 `Decision ready: intent=rule, weights=tactics, goal=iql; map=rmuc2027` 表示模型已加载；
+日志出现 `Decision ready: intent=rule, weights=tactics, goal=iql; map=rmuc2027_arena1` 表示模型已加载；
 尚未接入定位、比赛状态和 Nav2 时，任务保持 `HOLD`，运动许可为 `false`。
 
 第二个终端检查：

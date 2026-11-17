@@ -133,7 +133,7 @@ ros2 topic info -v /sentry/perception/tracks
 
 首次场地带电行走时**不加载任何学习模型**（`rl_model:="" intent_model:="" utility_model:=""`），并将底盘速度上限收紧至安全低速：
 
-1. 若使用内置 `velocity_guard`（方式一），在启动后确认或覆盖限幅参数（默认 `max_linear=1.5 m/s`、`max_angular=2.0 rad/s`，首测建议临时压低至 `0.5 m/s` 与 `0.8 rad/s`），同时检查 Nav2 代价图已正确加载红/蓝阵营对应的 `KeepoutFilter` 规则禁区掩码；
+1. 若使用内置 `velocity_guard`（方式一），注意 `max_linear`（默认 `1.5 m/s`）与 `max_angular`（默认 `2.0 rad/s`）是 `velocity_guard` 节点的启动 ROS 参数而非 `decision.launch.py` 顶层参数：首测需要临时压低至 `0.5 m/s` 与 `0.8 rad/s` 时，可在启动 `decision.launch.py` 时传 `enable_velocity_guard:=false`，再单独以 `ros2 run sentry_ros velocity_guard --ros-args -r __ns:=/sentry -p max_linear:=0.5 -p max_angular:=0.8`（或通过节点 YAML 参数文件 `--params-file`）启动门控节点；同时检查 Nav2 代价图已正确加载红/蓝阵营对应的 `KeepoutFilter` 规则禁区掩码；
 2. 触发一次 `DEFEND` 或 `RECOVER` 任务，目视确认目标点在场地上的物理方位、车体移动方向及避障行为完全正确；
 3. **必做底盘断连测试**：在低速移动中途人为断开上位机与底盘下位机通信（或停止速度发送节点），确认下位机硬件看门狗能在百毫秒级内可靠锁死零速（`velocity_guard` 是上位机最后一道软件门控，绝不能替代下位机硬件看门狗）。
 
