@@ -271,3 +271,57 @@ def test_decision_launch_exposes_executor_guard_and_precheck_switches():
             node.destroy_node()
     finally:
         rclpy.shutdown()
+
+
+def test_codec_round_trips_2027_game_robot_task_and_referee_cmd(world_factory):
+    from sentry_core.model import GameState, Phase, RobotStatus, Task, TaskType, Team, Vec2
+    from sentry_interfaces import msg as wire
+    from sentry_ros.codec import (
+        robot_status_from_msg, sentry_referee_cmd_to_msg, task_from_msg, task_to_msg,
+        world_from_msg, world_to_msg,
+    )
+
+    world = replace(
+        world_factory(hp=None),
+        game=GameState(
+            10.0, "rmuc2027", "RED", Phase.RUNNING, 280.0, True, 1,
+            own_gold=340.0, enemy_gold=190.0,
+        ),
+        robots={
+            7: RobotStatus(
+                7, Team.ALLY, 10.0, hp=320.0, max_hp=400.0, alive=True, level=2, ammo=0.65,
+                source=1, heat_ratio=0.55, last_hit_stamp=9.7, hit_armor_id=2,
+                posture="defense", posture_enhanced=True, posture_ready_at=14.2,
+                posture_time_sec=(15.0, 42.5, 90.0), enhanced_used_sec=(2.0, 4.5, 0.0),
+            ),
+        },
+    )
+    assert world_from_msg(world_to_msg(world)) == world
+
+    task = Task(
+        "sess", 3, 12, 10.0, 12.0, TaskType.INTERCEPT, "own_base", 103, "intercept:own_base:103",
+        Vec2(4.2, 6.8), 0.5, 0.85, 0.9, True, "BASE_THREAT",
+        posture="defense", posture_enhanced=True, spin_enabled=True, spin_rate_rad_s=-7.0,
+    )
+    task_msg = task_to_msg(task, "map", 10.0)
+    assert task_from_msg(task_msg, "map") == task
+    task_msg.posture = ""
+    assert task_from_msg(task_msg, "map").posture == "move"
+    task_msg.posture = "invalid"
+    with pytest.raises(ValueError, match="posture"):
+        task_from_msg(task_msg, "map")
+
+    unknown_posture = wire.RobotStatus(
+        robot_id=7, team=wire.RobotStatus.ALLY, posture=0, posture_valid=True
+    )
+    assert robot_status_from_msg(unknown_posture).posture is None
+    bad_posture = wire.RobotStatus(
+        robot_id=7, team=wire.RobotStatus.ALLY, posture=9, posture_valid=True
+    )
+    with pytest.raises(ValueError, match="posture"):
+        robot_status_from_msg(bad_posture)
+
+    cmd = sentry_referee_cmd_to_msg(task, "map", 10.0)
+    assert cmd.posture == "defense" and cmd.posture_code == 2 and cmd.posture_enhanced is True
+    assert cmd.raw_sentry_cmd == (2 << 21) and cmd.based_on_task_id == 3
+

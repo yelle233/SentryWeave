@@ -7,9 +7,9 @@ from pathlib import Path
 import time
 
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
 from sentry_interfaces.msg import (
-    TaskFeedback, TacticalTask, TeammateIntentArray, ThreatState, WorldState,
+    SentryRefereeCmd, TaskFeedback, TacticalTask, TeammateIntentArray, ThreatState, WorldState,
 )
 
 from sentry_core.inputs import view_inputs
@@ -19,7 +19,8 @@ from sentry_core.policy import DecisionEngine, defense_structure_destroyed
 from sentry_core.rl_policy import GoalPrior, mirror_setting
 from sentry_core.serde import json_line, world_to_dict
 from .codec import (
-    FEEDBACK_STATES, intents_to_msg, task_to_msg, threats_to_msg, world_from_msg,
+    FEEDBACK_STATES, intents_to_msg, sentry_referee_cmd_to_msg, task_to_msg, threats_to_msg,
+    world_from_msg,
 )
 from .common import LATEST, read_config, seconds, spin_node
 
@@ -50,8 +51,11 @@ class DecisionNode(Node):
         self.world = None
         self.last_evaluated = None
         self.last_critical = False
+        self.last_hit_stamp = None
         self.pending_feedback = []
         self.tasks = self.create_publisher(TacticalTask, "tactical/task", LATEST)
+        self.referee_cmds = self.create_publisher(SentryRefereeCmd, "referee/sentry_cmd", LATEST)
+        self.spins = self.create_publisher(Float32, "chassis/spin", LATEST)
         self.intents = self.create_publisher(TeammateIntentArray, "team/intents", LATEST)
         self.threats = self.create_publisher(ThreatState, "threat/state", LATEST)
         self.traces = self.create_publisher(String, "tactical/trace", LATEST)
@@ -89,7 +93,10 @@ class DecisionNode(Node):
                     or info.self_hp is not None and info.self_hp < self.config.critical_hp
                     or any(t.usable and z.contains(t.position)
                            for t in world.enemies for z in bases))
-        if critical != self.last_critical:
+        hit_changed = (info.self_last_hit_stamp is not None
+                       and info.self_last_hit_stamp != self.last_hit_stamp)
+        self.last_hit_stamp = info.self_last_hit_stamp
+        if critical != self.last_critical or hit_changed:
             self.last_critical = critical
             self._decide()
 
@@ -114,6 +121,11 @@ class DecisionNode(Node):
         started = time.perf_counter()
         decision = self.engine.step(world)
         self.tasks.publish(task_to_msg(decision.task, self.config.frame, now))
+        self.referee_cmds.publish(
+            sentry_referee_cmd_to_msg(decision.task, self.config.frame, now)
+        )
+        spin_val = decision.task.spin_rate_rad_s if decision.task.spin_enabled else 0.0
+        self.spins.publish(Float32(data=float(spin_val)))
         self.intents.publish(intents_to_msg(decision.intents, self.config.frame, now))
         self.threats.publish(threats_to_msg(decision.threats, self.config.frame, now))
         record = {

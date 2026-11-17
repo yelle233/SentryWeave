@@ -7,8 +7,8 @@ from geometry_msgs.msg import PoseStamped
 from sentry_interfaces import msg as wire
 
 from sentry_core.model import (
-    GameState, IntentType, Observation, Phase, Referee, RobotStatus, StructureState, Task, TaskType,
-    Team, Track, TrackStatus, Vec2, World,
+    POSTURES, POSTURE_BY_CODE, POSTURE_CODES, GameState, IntentType, Observation, Phase, Referee,
+    RobotStatus, StructureState, Task, TaskType, Team, Track, TrackStatus, Vec2, World,
 )
 
 
@@ -145,6 +145,12 @@ def game_to_msg(game: GameState, frame="map"):
     if game.supply_available is not None:
         result.supply_available = game.supply_available
     result.source = game.source
+    result.own_gold_valid = game.own_gold is not None
+    if game.own_gold is not None:
+        result.own_gold = float(game.own_gold)
+    result.enemy_gold_valid = game.enemy_gold is not None
+    if game.enemy_gold is not None:
+        result.enemy_gold = float(game.enemy_gold)
     return result
 
 
@@ -158,12 +164,15 @@ def game_from_msg(message) -> GameState:
         Phase(message.phase) if message.phase_valid else Phase.UNKNOWN,
         message.remaining_time if message.remaining_time_valid else None,
         message.supply_available if message.supply_valid else None, message.source,
+        own_gold=message.own_gold if message.own_gold_valid else None,
+        enemy_gold=message.enemy_gold if message.enemy_gold_valid else None,
     )
 
 
 def robot_status_to_msg(status: RobotStatus):
     result = wire.RobotStatus()
-    result.stamp, result.robot_id, result.team = stamp(status.stamp), status.robot_id, int(status.team)
+    result.stamp = stamp(status.stamp)
+    result.robot_id, result.team = status.robot_id, int(status.team)
     # hp and max_hp are valid independently: a known hp is kept without max_hp.
     result.hp_valid = status.hp is not None
     if status.hp is not None:
@@ -181,10 +190,54 @@ def robot_status_to_msg(status: RobotStatus):
     if status.ammo is not None:
         result.ammo_ratio = float(status.ammo)
     result.source = status.source
+    result.heat_valid = status.heat_ratio is not None
+    if status.heat_ratio is not None:
+        result.heat_ratio = float(status.heat_ratio)
+    result.last_hit_valid = status.last_hit_stamp is not None
+    if status.last_hit_stamp is not None:
+        result.last_hit_stamp = stamp(status.last_hit_stamp)
+    result.hit_armor_valid = status.hit_armor_id is not None
+    if status.hit_armor_id is not None:
+        result.hit_armor_id = int(status.hit_armor_id)
+    result.posture_valid = status.posture is not None
+    if status.posture is not None:
+        if status.posture not in POSTURE_CODES:
+            raise ValueError(f"invalid sentry posture {status.posture!r}")
+        result.posture = POSTURE_CODES[status.posture]
+    result.posture_enhanced_valid = status.posture_enhanced is not None
+    if status.posture_enhanced is not None:
+        result.posture_enhanced = bool(status.posture_enhanced)
+    result.posture_ready_valid = status.posture_ready_at is not None
+    if status.posture_ready_at is not None:
+        result.posture_ready_at = float(status.posture_ready_at)
+    result.posture_time_valid = status.posture_time_sec is not None
+    if status.posture_time_sec is not None:
+        if len(status.posture_time_sec) != 3:
+            raise ValueError("posture_time_sec must have 3 elements")
+        result.posture_time_sec = [float(x) for x in status.posture_time_sec]
+    result.enhanced_used_valid = status.enhanced_used_sec is not None
+    if status.enhanced_used_sec is not None:
+        if len(status.enhanced_used_sec) != 3:
+            raise ValueError("enhanced_used_sec must have 3 elements")
+        result.enhanced_used_sec = [float(x) for x in status.enhanced_used_sec]
     return result
 
 
 def robot_status_from_msg(message) -> RobotStatus:
+    if (message.posture != wire.RobotStatus.POSTURE_UNKNOWN
+            and message.posture not in POSTURE_BY_CODE):
+        raise ValueError(f"invalid sentry posture code {message.posture}")
+    posture = POSTURE_BY_CODE.get(message.posture) if message.posture_valid else None
+    posture_time = None
+    if message.posture_time_valid:
+        if len(message.posture_time_sec) != 3:
+            raise ValueError("posture_time_sec must have 3 elements")
+        posture_time = tuple(float(x) for x in message.posture_time_sec)
+    enhanced_used = None
+    if message.enhanced_used_valid:
+        if len(message.enhanced_used_sec) != 3:
+            raise ValueError("enhanced_used_sec must have 3 elements")
+        enhanced_used = tuple(float(x) for x in message.enhanced_used_sec)
     return RobotStatus(
         message.robot_id, Team(message.team), to_seconds(message.stamp),
         message.hp if message.hp_valid else None,
@@ -192,6 +245,18 @@ def robot_status_from_msg(message) -> RobotStatus:
         message.alive if message.alive_valid else None,
         message.level if message.level_valid else None,
         message.ammo_ratio if message.ammo_valid else None, message.source,
+        heat_ratio=message.heat_ratio if message.heat_valid else None,
+        last_hit_stamp=to_seconds(message.last_hit_stamp) if message.last_hit_valid else None,
+        hit_armor_id=int(message.hit_armor_id) if message.hit_armor_valid else None,
+        posture=posture,
+        posture_enhanced=(
+            bool(message.posture_enhanced) if message.posture_enhanced_valid else None
+        ),
+        posture_ready_at=(
+            float(message.posture_ready_at) if message.posture_ready_valid else None
+        ),
+        posture_time_sec=posture_time,
+        enhanced_used_sec=enhanced_used,
     )
 
 
@@ -256,6 +321,8 @@ def world_from_msg(message):
 
 
 def task_to_msg(task: Task, frame: str, now: float):
+    if task.posture not in POSTURES:
+        raise ValueError(f"invalid sentry posture {task.posture!r}")
     result = wire.TacticalTask()
     result.header.frame_id, result.header.stamp = frame, stamp(now)
     result.session_id, result.task_id = task.session_id, task.task_id
@@ -269,6 +336,10 @@ def task_to_msg(task: Task, frame: str, now: float):
     result.utility, result.confidence, result.urgent = task.utility, task.confidence, task.urgent
     result.created_at, result.valid_until = stamp(task.created_at), stamp(task.valid_until)
     result.reason_code = task.reason
+    result.posture = task.posture
+    result.posture_enhanced = bool(task.posture_enhanced)
+    result.spin_enabled = bool(task.spin_enabled)
+    result.spin_rate_rad_s = float(task.spin_rate_rad_s)
     return result
 
 
@@ -276,15 +347,38 @@ def task_from_msg(message, frame: str):
     if (message.header.frame_id != frame
             or message.target_pose_valid and message.target_pose.header.frame_id != frame):
         raise ValueError("task frame mismatch")
+    posture = message.posture or "move"
+    if posture not in POSTURES:
+        raise ValueError(f"invalid sentry posture {message.posture!r}")
     p = message.target_pose.pose
     return Task(
         message.session_id, message.task_id, message.based_on_world_seq,
-        to_seconds(message.created_at), to_seconds(message.valid_until), TaskType(message.task_type),
+        to_seconds(message.created_at), to_seconds(message.valid_until),
+        TaskType(message.task_type),
         message.target_zone_id, message.target_robot_id if message.target_robot_valid else None,
         message.goal_id, Vec2(p.position.x, p.position.y) if message.target_pose_valid else None,
         yaw(p.orientation) if message.target_pose_valid else 0.,
         message.utility, message.confidence, message.urgent, message.reason_code,
+        posture=posture,
+        posture_enhanced=bool(message.posture_enhanced),
+        spin_enabled=bool(message.spin_enabled),
+        spin_rate_rad_s=float(message.spin_rate_rad_s),
     )
+
+
+def sentry_referee_cmd_to_msg(task: Task, frame: str, now: float):
+    if task.posture not in POSTURE_CODES:
+        raise ValueError(f"invalid sentry posture {task.posture!r}")
+    code = POSTURE_CODES[task.posture]
+    result = wire.SentryRefereeCmd()
+    result.header.frame_id, result.header.stamp = frame, stamp(now)
+    result.posture_code = code
+    result.posture = task.posture
+    result.posture_enhanced = bool(task.posture_enhanced)
+    result.raw_sentry_cmd = (code & 0x3) << 21
+    result.based_on_task_id = task.task_id
+    result.reason_code = task.reason
+    return result
 
 
 def intents_to_msg(intents, frame, now):

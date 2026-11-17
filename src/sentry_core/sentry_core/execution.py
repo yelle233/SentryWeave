@@ -290,22 +290,41 @@ class Executor:
 class VelocityGate:
     """Final software velocity gate; does not replace the chassis hardware watchdog."""
 
-    def __init__(self, command_timeout=0.25, permit_timeout=0.3,
-                 max_linear=2.0, max_angular=2.0):
-        if not all(math.isfinite(v) and v > 0 for v in (
-            command_timeout, permit_timeout, max_linear, max_angular
-        )):
+    def __init__(
+        self,
+        command_timeout=0.25,
+        permit_timeout=0.3,
+        max_linear=2.0,
+        max_angular=2.0,
+        inject_spin: bool = False,
+        max_spin_angular: float = 8.0,
+        spin_timeout: float = 1.0,
+    ):
+        if not all(
+            not isinstance(v, bool) and math.isfinite(v) and v > 0
+            for v in (
+                command_timeout, permit_timeout, max_linear, max_angular,
+                max_spin_angular, spin_timeout,
+            )
+        ):
             raise ValueError("velocity gate limits and timeouts must be finite and positive")
         self.command_timeout, self.permit_timeout = command_timeout, permit_timeout
         self.max_linear, self.max_angular = max_linear, max_angular
-        self._command_at = self._permit_at = -math.inf
+        self.inject_spin = bool(inject_spin)
+        self.max_spin_angular = float(max_spin_angular)
+        self.spin_timeout = float(spin_timeout)
+        self._command_at = self._permit_at = self._spin_at = -math.inf
         self._allowed = False
-        self._velocity = (0., 0., 0.)
+        self._velocity = (0.0, 0.0, 0.0)
+        self._spin_rate = 0.0
 
     def permit(self, allowed: bool, now: float) -> None:
         if not allowed or bool(allowed) != self._allowed:
-            self._velocity = (0., 0., 0.)
+            self._velocity = (0.0, 0.0, 0.0)
             self._command_at = -math.inf
+            if not allowed:
+                self._spin_rate = 0.0
+                self._spin_at = -math.inf
         self._allowed, self._permit_at = bool(allowed), now
 
     def command(self, vx: float, vy: float, yaw_rate: float, now: float) -> None:
@@ -313,14 +332,36 @@ class VelocityGate:
             return
         self._command_at = now
         if not all(math.isfinite(v) for v in (vx, vy, yaw_rate)):
-            self._velocity = (0., 0., 0.)
+            self._velocity = (0.0, 0.0, 0.0)
             return
-        scale = min(1., self.max_linear / max(math.hypot(vx, vy), 1e-9))
-        self._velocity = (vx * scale, vy * scale,
-                          max(-self.max_angular, min(self.max_angular, yaw_rate)))
+        scale = min(1.0, self.max_linear / max(math.hypot(vx, vy), 1e-9))
+        self._velocity = (
+            vx * scale,
+            vy * scale,
+            max(-self.max_angular, min(self.max_angular, yaw_rate)),
+        )
+
+    def spin(self, rate_rad_s: float, now: float) -> None:
+        if not self.inject_spin:
+            return
+        if not math.isfinite(rate_rad_s):
+            self._spin_rate = 0.0
+            self._spin_at = -math.inf
+            return
+        clamped = max(-self.max_spin_angular, min(self.max_spin_angular, float(rate_rad_s)))
+        self._spin_rate = clamped
+        self._spin_at = now
 
     def output(self, now: float) -> tuple[float, float, float]:
-        if (not self._allowed or not 0 <= now - self._permit_at <= self.permit_timeout
-                or not 0 <= now - self._command_at <= self.command_timeout):
-            return 0., 0., 0.
-        return self._velocity
+        if not self._allowed or not 0 <= now - self._permit_at <= self.permit_timeout:
+            return 0.0, 0.0, 0.0
+        cmd_fresh = 0 <= now - self._command_at <= self.command_timeout
+        vx, vy, omega = self._velocity if cmd_fresh else (0.0, 0.0, 0.0)
+        if (self.inject_spin and 0 <= now - self._spin_at <= self.spin_timeout
+                and abs(self._spin_rate) > 1e-6):
+            omega = self._spin_rate
+            return vx, vy, omega
+        if not cmd_fresh:
+            return 0.0, 0.0, 0.0
+        return vx, vy, omega
+

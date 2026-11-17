@@ -262,3 +262,43 @@ def test_executor_rejects_tasks_outside_configured_goal_scope(config):
                         "TEAM_SUPPORT_HIGH")
     machine.submit(out_of_scope, 10.0, 100.0)
     assert [(c.kind, c.state) for c in machine.drain()] == [("FEEDBACK", "REJECTED")]
+
+
+def test_velocity_gate_optional_spin_injection_is_strictly_gated_by_permit():
+    from sentry_core.execution import VelocityGate
+
+    # Default inject_spin=False ignores spin commands completely.
+    default_gate = VelocityGate()
+    default_gate.permit(True, 10.0)
+    default_gate.spin(7.0, 10.0)
+    assert default_gate.output(10.05) == (0.0, 0.0, 0.0)
+
+    # With inject_spin=True, spin overrides yaw_rate ONLY while permit is allowed and fresh!
+    gate = VelocityGate(max_linear=1.5, max_angular=2.0, inject_spin=True, max_spin_angular=8.0,
+                        spin_timeout=1.0)
+    gate.spin(7.5, 10.0)
+    assert gate.output(10.05) == (0.0, 0.0, 0.0)  # Permit not yet granted -> NEVER spin!
+
+    gate.permit(True, 10.1)
+    gate.spin(9.5, 10.1)  # Clamped to max_spin_angular=8.0 even if nav_cmd_vel is idle (0, 0)
+    assert gate.output(10.2) == (0.0, 0.0, 8.0)
+
+    gate.command(1.0, 0.0, 0.3, 10.2)
+    assert gate.output(10.25) == (1.0, 0.0, 8.0)
+
+    # Once spin command expires (> 1.0s), falls back to normal nav_cmd_vel yaw_rate.
+    gate.permit(True, 11.2)
+    gate.command(1.0, 0.0, 0.4, 11.2)
+    assert gate.output(11.25) == (1.0, 0.0, 0.4)
+
+    # Explicit 0.0 or NaN spin also cancels spin override immediately.
+    gate.spin(-6.0, 11.26)
+    assert gate.output(11.27) == (1.0, 0.0, -6.0)
+    gate.spin(0.0, 11.28)
+    assert gate.output(11.29) == (1.0, 0.0, 0.4)
+
+    # Revoking permit immediately zeroes both linear velocity and injected spin!
+    gate.spin(-7.0, 11.29)
+    gate.permit(False, 11.3)
+    assert gate.output(11.31) == (0.0, 0.0, 0.0)
+

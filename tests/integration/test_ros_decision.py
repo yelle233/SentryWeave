@@ -154,3 +154,98 @@ def test_goal_scope_launch_argument_and_node_parameter(tmp_path):
             make_node(SEASON, False)
     finally:
         rclpy.shutdown()
+
+
+def test_decision_node_publishes_sentry_cmd_and_spin_and_guard_gates_spin(tmp_path):
+    import time
+    import rclpy
+    from geometry_msgs.msg import Twist
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.node import Node
+    from rclpy.parameter import Parameter
+    from std_msgs.msg import Float32
+    from sentry_core.config import load_config
+    from sentry_core.model import GameState, Observation, Phase, RobotStatus, Team
+    from sentry_core.tracking import WorldModel
+    from sentry_interfaces.msg import MotionPermit, SentryRefereeCmd, TacticalTask
+    from sentry_ros.codec import stamp, world_to_msg
+    from sentry_ros.common import LATEST, seconds
+    from sentry_ros.decision_node import DecisionNode
+    from sentry_ros.guard_node import GuardNode
+    from test_model_fallback import SEASON
+
+    season = load_config(SEASON)
+    rclpy.init()
+    try:
+        decision = DecisionNode(parameter_overrides=[Parameter("config_file", value=str(SEASON))])
+        guard = GuardNode(parameter_overrides=[
+            Parameter("inject_spin_into_cmd_vel", value=True),
+            Parameter("max_spin_angular", value=8.0),
+        ])
+        probe = Node("posture_spin_probe")
+        executor = SingleThreadedExecutor()
+        for n in (decision, guard, probe):
+            executor.add_node(n)
+        tasks, cmds, spins, cmd_vels = [], [], [], []
+        probe.create_subscription(TacticalTask, "tactical/task", tasks.append, LATEST)
+        probe.create_subscription(SentryRefereeCmd, "referee/sentry_cmd", cmds.append, LATEST)
+        probe.create_subscription(Float32, "chassis/spin", spins.append, LATEST)
+        probe.create_subscription(Twist, "cmd_vel", cmd_vels.append, LATEST)
+        permits = probe.create_publisher(MotionPermit, "motion/permit", LATEST)
+
+        now = seconds(decision)
+        model = WorldModel(season)
+        pos = season.points[0].position
+        for t in (now - 0.4, now - 0.2, now):
+            model.observe(Observation(season.self_id, Team.ALLY, pos, t), t)
+        model.update_game(GameState(now, "rmuc2027", "RED", Phase.RUNNING, 300.0, True), now)
+        model.update_robot(
+            RobotStatus(
+                season.self_id, Team.ALLY, now, hp=340.0, max_hp=400.0, alive=True, ammo=0.8,
+                source=1, heat_ratio=0.85, last_hit_stamp=now, hit_armor_id=0,
+            ),
+            now,
+        )
+        # Immediate _world reaction on hit without waiting for the 2 Hz timer:
+        decision._world(world_to_msg(model.snapshot(now)))
+        deadline = time.monotonic() + 3.0
+        while (not cmds or not spins) and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.02)
+
+        assert cmds and cmds[-1].posture == "attack"
+        assert cmds[-1].raw_sentry_cmd == (1 << 21)
+        assert spins and abs(spins[-1].data) == pytest.approx(season.spin_speed_rad_s)
+        assert tasks and tasks[-1].spin_enabled is True
+
+        # Without MotionPermit.allowed=True, GuardNode MUST output 0 angular.z!
+        guard._tick()
+        for _ in range(5):
+            executor.spin_once(timeout_sec=0.02)
+        assert cmd_vels and cmd_vels[-1].angular.z == 0.0
+
+        # Grant MotionPermit -> GuardNode injects clamped spin angular.z; revoke -> immediate 0.0!
+        permit = MotionPermit()
+        permit.header.stamp = stamp(seconds(probe))
+        permit.executor_session, permit.sequence, permit.allowed = "exec-1", 1, True
+        permits.publish(permit)
+        for _ in range(8):
+            executor.spin_once(timeout_sec=0.02)
+        guard._tick()
+        for _ in range(5):
+            executor.spin_once(timeout_sec=0.02)
+        assert abs(cmd_vels[-1].angular.z) == pytest.approx(season.spin_speed_rad_s)
+
+        permit.header.stamp = stamp(seconds(probe))
+        permit.sequence, permit.allowed = 2, False
+        permits.publish(permit)
+        for _ in range(8):
+            executor.spin_once(timeout_sec=0.02)
+        guard._tick()
+        for _ in range(5):
+            executor.spin_once(timeout_sec=0.02)
+        assert cmd_vels[-1].angular.z == 0.0
+    finally:
+        for n in (probe, guard, decision):
+            n.destroy_node()
+        rclpy.shutdown()
+

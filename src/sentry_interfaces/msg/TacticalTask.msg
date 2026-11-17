@@ -20,3 +20,11 @@ bool urgent
 builtin_interfaces/Time created_at
 builtin_interfaces/Time valid_until
 string reason_code
+uint8 POSTURE_ATTACK=1
+uint8 POSTURE_DEFENSE=2
+uint8 POSTURE_MOVE=3
+string posture                # "attack" | "defense" | "move"
+bool posture_enhanced         # 2027 enhanced posture request
+bool spin_enabled             # reactive chassis spin active flag
+float64 spin_rate_rad_s       # target chassis spin rate in rad/s (0 when disabled)
+

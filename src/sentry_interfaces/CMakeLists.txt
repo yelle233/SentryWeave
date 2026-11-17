@@ -21,6 +21,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ZoneThreat.msg"
   "msg/ThreatState.msg"
   "msg/TacticalTask.msg"
+  "msg/SentryRefereeCmd.msg"
   "msg/TaskFeedback.msg"
   "msg/MotionPermit.msg"
   DEPENDENCIES std_msgs geometry_msgs builtin_interfaces
