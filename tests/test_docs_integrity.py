@@ -123,3 +123,22 @@ def test_python_code_blocks_in_new_guides_compile():
         assert blocks, f"Expected at least one python example in {doc.name}"
         for idx, code in enumerate(blocks):
             compile(code, f"{doc.name}#block{idx}", "exec")
+
+
+def test_2027_referee_radar_posture_and_spin_contracts_are_documented():
+    interfaces = (ROOT / "docs/interfaces.md").read_text(encoding="utf-8")
+    for token in (
+        "0x0003", "0x0120", "0x0202", "0x0206", "0x0208", "0x020B", "0x020D", "5.7.4",
+        "SentryRefereeCmd", "referee/sentry_cmd", "chassis/spin",
+        "ally_status", "enemy_status", "posture_enhanced", "spin_rate_rad_s",
+    ):
+        assert token in interfaces, f"docs/interfaces.md missing 2027 contract token: {token}"
+
+    offline_rl = (ROOT / "docs/offline-rl.md").read_text(encoding="utf-8")
+    for token in ("feature_version = 2", "schema_version = 2", "85", "posture"):
+        assert token in offline_rl, f"docs/offline-rl.md missing v2 RL token: {token}"
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for token in ("referee/sentry_cmd", "chassis/spin", "0x0120", "0x020B"):
+        assert token in readme, f"README.md missing 2027 IO token: {token}"
+

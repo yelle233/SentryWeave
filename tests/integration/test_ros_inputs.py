@@ -311,6 +311,10 @@ def test_codec_round_trips_2027_game_robot_task_and_referee_cmd(world_factory):
     with pytest.raises(ValueError, match="posture"):
         task_from_msg(task_msg, "map")
 
+    unflagged_garbage = wire.RobotStatus(
+        robot_id=7, team=wire.RobotStatus.ALLY, posture=255, posture_valid=False
+    )
+    assert robot_status_from_msg(unflagged_garbage).posture is None
     unknown_posture = wire.RobotStatus(
         robot_id=7, team=wire.RobotStatus.ALLY, posture=0, posture_valid=True
     )
@@ -323,5 +327,10 @@ def test_codec_round_trips_2027_game_robot_task_and_referee_cmd(world_factory):
 
     cmd = sentry_referee_cmd_to_msg(task, "map", 10.0)
     assert cmd.posture == "defense" and cmd.posture_code == 2 and cmd.posture_enhanced is True
-    assert cmd.raw_sentry_cmd == (2 << 21) and cmd.based_on_task_id == 3
+    assert cmd.confirm_revive is True
+    assert cmd.raw_sentry_cmd == ((2 << 21) | 1) and cmd.based_on_task_id == 3
+
+    cmd_no_revive = sentry_referee_cmd_to_msg(task, "map", 10.0, confirm_revive=False)
+    assert cmd_no_revive.confirm_revive is False
+    assert cmd_no_revive.raw_sentry_cmd == (2 << 21)
 

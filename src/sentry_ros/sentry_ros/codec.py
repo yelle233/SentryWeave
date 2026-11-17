@@ -224,10 +224,12 @@ def robot_status_to_msg(status: RobotStatus):
 
 
 def robot_status_from_msg(message) -> RobotStatus:
-    if (message.posture != wire.RobotStatus.POSTURE_UNKNOWN
-            and message.posture not in POSTURE_BY_CODE):
-        raise ValueError(f"invalid sentry posture code {message.posture}")
-    posture = POSTURE_BY_CODE.get(message.posture) if message.posture_valid else None
+    posture = None
+    if message.posture_valid:
+        if (message.posture != wire.RobotStatus.POSTURE_UNKNOWN
+                and message.posture not in POSTURE_BY_CODE):
+            raise ValueError(f"invalid sentry posture code {message.posture}")
+        posture = POSTURE_BY_CODE.get(message.posture)
     posture_time = None
     if message.posture_time_valid:
         if len(message.posture_time_sec) != 3:
@@ -366,16 +368,20 @@ def task_from_msg(message, frame: str):
     )
 
 
-def sentry_referee_cmd_to_msg(task: Task, frame: str, now: float):
+def sentry_referee_cmd_to_msg(
+    task: Task, frame: str, now: float, confirm_revive: bool = True
+):
     if task.posture not in POSTURE_CODES:
         raise ValueError(f"invalid sentry posture {task.posture!r}")
     code = POSTURE_CODES[task.posture]
+    revive = bool(confirm_revive)
     result = wire.SentryRefereeCmd()
     result.header.frame_id, result.header.stamp = frame, stamp(now)
     result.posture_code = code
     result.posture = task.posture
     result.posture_enhanced = bool(task.posture_enhanced)
-    result.raw_sentry_cmd = (code & 0x3) << 21
+    result.confirm_revive = revive
+    result.raw_sentry_cmd = ((code & 0x3) << 21) | int(revive)
     result.based_on_task_id = task.task_id
     result.reason_code = task.reason
     return result

@@ -21,10 +21,10 @@
 
 | 话题 / TF（相对 `/sentry`） | 消息类型 | 建议频率 | `world_model` 订阅 QoS | 用途与优先级 |
 |---|---|---|---|---|
-| `game/status` | `sentry_interfaces/GameStatus` | 1–5 Hz | **RELIABLE**, Volatile, KeepLast(1) | 赛季、己方红蓝、比赛阶段、剩余时间、补给区可用性（**推荐主接口**） |
-| `robots/status` | `sentry_interfaces/RobotStatusArray` | 1–10 Hz | **RELIABLE**, Volatile, KeepLast(10) | 敌我各机器人血量、血量上限、存活、等级、允许发弹比例（支持裁判串口、雷达站、队内链路多桥接节点并发发布） |
-| `structures/status` | `sentry_interfaces/StructureStatus` | 1–5 Hz | **RELIABLE**, Volatile, KeepLast(10) | 双方基地与前哨站血量、存活、护盾（支持多桥接节点并发发布） |
-| `perception/tracks` | `sentry_interfaces/ObservationArray` | 5–20 Hz | `SensorDataQoS`（**BEST_EFFORT**, Volatile, KeepLast(5)） | 带稳定 `robot_id` 与原始采样时刻的敌我地面位置观测（本机 `ALLY + self_id` 条目会被自动忽略，防止外部雷达覆盖本机定位） |
+| `game/status` | `sentry_interfaces/GameStatus` | 1–5 Hz | **RELIABLE**, Volatile, KeepLast(1) | 赛季、己方红蓝、比赛阶段、剩余时间、补给区可用性、己方剩余金币（`0x0208`）与敌方剩余金币（雷达 §5.7.4）（**推荐主接口**） |
+| `robots/status` | `sentry_interfaces/RobotStatusArray` | 1–10 Hz | **RELIABLE**, Volatile, KeepLast(10) | 敌我各机器人血量、血量上限、存活、等级、发弹比例，以及本机枪口热量比（`0x0202`）、装甲受击时刻/板号（`0x0206`）与 2027 哨兵姿态同步（`0x020D`）（支持多桥接节点并发按字段合并） |
+| `structures/status` | `sentry_interfaces/StructureStatus` | 1–5 Hz | **RELIABLE**, Volatile, KeepLast(10) | 双方基地与前哨站血量、存活、护盾（常规裁判 `0x0003` 常通，支持多桥接节点并发发布） |
+| `perception/tracks` | `sentry_interfaces/ObservationArray` | 1–20 Hz | `SensorDataQoS`（**BEST_EFFORT**, Volatile, KeepLast(5)） | 带稳定 `robot_id` 与原始采样时刻的地面位置观测：支持裁判 `0x020B`（1 Hz 己方坐标保底）、本机视觉（`SOURCE_ONBOARD=4`）与雷达站（`SOURCE_RADAR=2`）并发输入（本机 `ALLY + self_id` 条目自动忽略） |
 | `map -> odom -> base_link`（或 `self_pose`） | TF（或 `geometry_msgs/PoseWithCovarianceStamped`） | 10–50 Hz | TF 标准 / `SensorDataQoS` | 本机权威定位（默认 `self_from_tf:=true` 查 TF；设为 `false` 时订阅 `self_pose`） |
 | `localization_ok` | `std_msgs/Bool` | 5–20 Hz | **RELIABLE**, Volatile, KeepLast(1) | 定位健康心跳：`require_localization_health:=true`（`robot.launch.py` 默认开启）时必须持续发布，单调时钟超时 `> 0.5 s` 或 `false` 立即进入 `SAFE_STOP` |
 | `referee/state` | `sentry_interfaces/RefereeState` | 1–5 Hz | **RELIABLE**, Volatile, KeepLast(1) | **旧版兼容接口（将废弃）**；同一字段若新接口有效且未超时，始终以新接口为准 |
@@ -41,16 +41,37 @@
 | 话题 / Action / Service | 类型 | 方向与默认频率 | QoS / 协议 | 说明 |
 |---|---|---|---|---|
 | `world/state` | `sentry_interfaces/WorldState` | `world_model -> decision, executor`（10 Hz） | **RELIABLE**, Volatile, KeepLast(1) | 融合后的世界快照（轨迹代龄、分字段新鲜状态、运行模式） |
-| `tactical/task` | `sentry_interfaces/TacticalTask` | `decision -> executor` / 自研导航栈（默认 2 Hz，临界状态跳变立即触发） | **RELIABLE**, Volatile, KeepLast(1) | 经效用评分、RL 受限混合与防抖仲裁后的带租约战术任务 |
+| `tactical/task` | `sentry_interfaces/TacticalTask` | `decision -> executor` / 自研导航栈（默认 2 Hz，临界状态或新受击跳变立即触发） | **RELIABLE**, Volatile, KeepLast(1) | 经效用评分、RL 受限混合与防抖仲裁后的带租约战术任务（含 2027 哨兵姿态 `posture` / `posture_enhanced` 与小陀螺参数 `spin_enabled` / `spin_rate_rad_s`） |
+| `referee/sentry_cmd` | `sentry_interfaces/SentryRefereeCmd` | `decision ->` 裁判串口桥接节点（2 Hz + 受击/临界跳变即发） | **RELIABLE**, Volatile, KeepLast(1) | 哨兵自主裁判指令：输出 `posture_code`（`1..3`）、`posture_enhanced`、`confirm_revive` 与预打包 `0x0120` 32 位掩码 `raw_sentry_cmd` |
+| `chassis/spin` | `std_msgs/Float32` | `decision ->` 云台随动主控 / 可选 `velocity_guard`（2 Hz + 受击跳变即发） | **RELIABLE**, Volatile, KeepLast(1) | 响应式反自瞄小陀螺目标角速度（`rad/s`，正负自动翻转）；安全 `HOLD` 或未激活时恒为 `0.0` |
 | `tactical/feedback` | `sentry_interfaces/TaskFeedback` | `executor` / 自研导航栈 `-> decision`（事件驱动 + 导航进度） | **RELIABLE**, Volatile, KeepLast(20) | 执行状态回传，驱动失败点 `5.0 s` 冷却与取消重发 |
 | `team/intents` | `sentry_interfaces/TeammateIntentArray` | `decision` 对外发布（2 Hz） | **RELIABLE**, Volatile, KeepLast(1) | 友方地面机器人 6 类战术意图概率分布与置信度 |
 | `threat/state` | `sentry_interfaces/ThreatState` | `decision` 对外发布（2 Hz） | **RELIABLE**, Volatile, KeepLast(1) | 各 `DEFEND_BASE` 防区的最大威胁分、首要拦截目标与预计到达时间 |
-| `tactical/trace` | `std_msgs/String` | `decision` 对外发布（2 Hz） | **RELIABLE**, Volatile, KeepLast(1) | 单行 JSON 决策全量审计记录（含 `missing_info` 与 `policy_info`；配置 `trace_path` 时同步写滚动 JSONL） |
+| `tactical/trace` | `std_msgs/String` | `decision` 对外发布（2 Hz + 跳变即发） | **RELIABLE**, Volatile, KeepLast(1) | 单行 JSON 决策全量审计记录（含 7 维 `missing_info` 与含姿态/自旋审计的 `policy_info`；配置 `trace_path` 时同步写滚动 JSONL） |
 | `compute_path_to_pose` | `nav2_msgs/action/ComputePathToPose` | `executor -> planner_server` | ROS 2 Action | `check_path_before_navigate:=true`（默认）时发送导航前整条路径规则合法性预检 |
 | `navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | `executor -> bt_navigator` | ROS 2 Action | `enable_executor:=true`（默认）时由 `executor` 独占管理目标发送、取消与终态确认 |
 | `motion/permit` | `sentry_interfaces/MotionPermit` | `executor -> velocity_guard`（20 Hz 单调时钟） | **RELIABLE**, Volatile, KeepLast(1) | 带执行器会话 UUID 与递增序号的运动许可心跳 |
-| `cmd_vel` | `geometry_msgs/Twist` | `velocity_guard ->` 底盘驱动（50 Hz 单调时钟） | **RELIABLE**, Volatile, KeepLast(1) | 经 `nav_cmd_vel` 限幅与 `motion/permit` 双看门狗门控后的最终底盘速度 |
+| `cmd_vel` | `geometry_msgs/Twist` | `velocity_guard ->` 底盘驱动（50 Hz 单调时钟） | **RELIABLE**, Volatile, KeepLast(1) | 经 `nav_cmd_vel` 限幅与 `motion/permit` 双看门狗门控后的最终底盘速度（可选启用 `inject_spin_into_cmd_vel:=true` 在许可有效期间注入安全自旋角速度） |
 | `executor/reset_fault` | `std_srvs/srv/Trigger` | 运维调用 `-> executor` | ROS 2 Service | 在定位与 Nav2 恢复且无未决导航后，复位执行器锁定故障 |
+
+### 1.4 RMUC 2027 常规机载裁判链路 vs 雷达视觉 / §5.7.4 无线电信息波真值表
+
+对照《RoboMaster 2027 机甲大师超级对抗赛比赛规则手册 V1.0.0》§5.7.2 / §5.7.4 与《裁判系统串口协议附录 V2.0.0》，哨兵机载常规裁判串口与雷达站（视觉定位 + 无线电信息波解调）之间存在严格的物理信息边界——**当己方雷达阵亡、被遮挡或无线电信息波失锁时，常规裁判串口与本机视觉依然 100% 在线**：
+
+| 协议命令码 / 传感器 | 权威字段内容 | 典型频率 | `source` / `source_mask` | 雷达阵亡 / 信息波失锁时是否可用 | SentryWeave 映射落点 |
+|---|---|---:|---|---|---|
+| `0x0001` 比赛状态 | 比赛阶段 `phase`、当前阶段剩余时间 `remaining_time` | 1 Hz | `SOURCE_REFEREE (1)` | **100% 可用** | `GameStatus.{phase, remaining_time}` |
+| `0x0003` 机器人/建筑血量 | **仅含己方地面机器人 HP** 与 **双方前哨站 / 双方基地 HP**（**不含敌方单机 HP**） | 3 Hz | `SOURCE_REFEREE (1)` | **100% 可用** | `RobotStatus(ALLY)`（计入 `ally_status`）、`StructureState(own_*, enemy_*)` |
+| `0x0201` 本机状态 | 本机 `hp`、`max_hp`、底盘功率上限、枪口冷却速率 | 10 Hz | `SOURCE_REFEREE (1)` | **100% 可用** | `RobotStatus(self_id)` |
+| `0x0202` 实时功率热量 | 底盘缓冲能量、**实时枪口热量比 `heat_ratio = heat / max_heat`** | 10 Hz | `SOURCE_REFEREE (1)` | **100% 可用** | `RobotStatus.heat_ratio`（驱动高热切换进攻姿态 3× 快冷） |
+| `0x0206` 伤害状态 | **受击时间戳 `last_hit_stamp`**、**受击装甲板索引 `hit_armor_id` (`0..5`)** | 事件触发 | `SOURCE_REFEREE (1)` | **100% 可用**（未接 `0x0206` 时由 `WorldModel` 监测本机有效 HP 下降自动合成受击时刻兜底） | `RobotStatus.{last_hit_stamp, hit_armor_id}`（`< 100 ms` 立即重决策触发小陀螺与防御姿态） |
+| `0x0208` 允许发弹量/金币 | 本机允许发弹比例 `ammo_ratio`、**己方剩余金币 `own_gold`** | 10 Hz | `SOURCE_REFEREE (1)` | **100% 可用** | `RobotStatus.ammo_ratio`、`GameStatus.own_gold` |
+| `0x020B` 地面机器人位置 | 服务器向哨兵下发 **己方地面机器人 `(x, y)` UWB 坐标保底** | **1 Hz** | `SOURCE_REFEREE (1)` | **100% 可用**（队友定位模块在线即可，无需雷达站存活） | `RobotObservation(ALLY, source_mask=1)` |
+| `0x020D` 哨兵自主决策同步 | 当前生效姿态 `posture`、强化位 `posture_enhanced`、冷却就绪时刻 `posture_ready_at`、三姿态累计保持时长 `posture_time_sec[3]` 与强化已用时长 `enhanced_used_sec[3]` | 1 Hz | `SOURCE_REFEREE (1)` | **100% 可用** | `RobotStatus(self_id)` |
+| `0x0120` 哨兵自主决策指令 | 上行 `sentry_cmd`：bit 0 确认免费复活、**bits 21–22 哨兵姿态切换指令（`1=attack, 2=defense, 3=move`）** | 2 Hz + 跳变 | 机载上行 TX | **100% 可用** | 输出话题 `referee/sentry_cmd`（`SentryRefereeCmd.raw_sentry_cmd`） |
+| 本机云台相机视觉 | 本机视野内直接可见的敌方地面位置 | 10–30 Hz | `SOURCE_ONBOARD (4)` | **100% 可用** | `RobotObservation(ENEMY, source_mask=4)` |
+| 雷达站全局视觉 / 队内共享 | **本机视野外的敌方地面位置**、高频（10 Hz）队友轨迹补充 | 5–20 Hz | `SOURCE_RADAR (2)` / `SOURCE_TEAM (8)` | **随雷达掉线成片丢失** | `RobotObservation(source_mask=2)` |
+| 雷达 **§5.7.4 无线电信息波** | **敌方单机剩余 HP 与允许发弹量**（§5.7.4 第 2、3 项）、**敌方剩余金币 `enemy_gold`**（第 5、6 项） | 1–3 Hz | `SOURCE_RADAR (2)` | **随雷达掉线或信息波失锁丢失** | `RobotStatus(ENEMY, source=2)`（计入 `enemy_status`）、`GameStatus.enemy_gold` |
 
 ---
 
@@ -74,6 +95,8 @@
 | `remaining_time` | `float64` | `remaining_time_valid` (`bool`) | 当前阶段剩余秒数（有限且 `>= 0`）；无效时置 `remaining_time_valid=false` |
 | `supply_available` | `bool` | `supply_valid` (`bool`) | 己方补给/恢复区当前是否可用；`supply_valid=false` 或值为 `false` 时不生成 `RECOVER` 任务 |
 | `source` | `uint32` 位掩码 | `SOURCE_REFEREE=1`, `SOURCE_RADAR=2`, `SOURCE_ONBOARD=4`, `SOURCE_TEAM=8` | 数据来源位掩码，支持按位或组合 |
+| `own_gold` | `float64`（`>= 0`） | `own_gold_valid` (`bool`) | 常规裁判 `0x0208` 己方剩余金币；未知置 `own_gold_valid=false` |
+| `enemy_gold` | `float64`（`>= 0`） | `enemy_gold_valid` (`bool`) | 雷达 §5.7.4 无线电信息波解调获知的敌方剩余金币；未知或失锁置 `enemy_gold_valid=false` |
 
 ### 2.3 `RobotStatusArray.msg` 与 `RobotStatus.msg`（话题：`robots/status`）
 
@@ -88,8 +111,16 @@
 | `max_hp` | `float64`（`> 0`） | `max_hp_valid` (`bool`) | **仅管辖 `max_hp`**。血量比例 `hp_ratio = clamp(hp / max_hp, 0, 1)` 仅在 `hp_valid` 与 `max_hp_valid` **同时为真**（或分包合并后两者均未超时）时才非空；否则 `hp_ratio` 保持 `None`（未知） |
 | `alive` | `bool` | `alive_valid` (`bool`) | 显式存活标志；有效时优先于 `hp > 0` 决定 `known_alive` |
 | `level` | `uint16` | `level_valid` (`bool`) | 机器人等级；未知置 `level_valid=false` |
-| `ammo_ratio` | `float64`（**`[0.0, 1.0]`**） | `ammo_valid` (`bool`) | 剩余允许发弹比例（超出 `[0, 1]` 整条拒绝）。按满额发弹基数折算；敌方或未知弹量必须置 `ammo_valid=false` |
-| `source` | `uint32` 位掩码 | `SOURCE_REFEREE=1`, `SOURCE_RADAR=2`, `SOURCE_ONBOARD=4`, `SOURCE_TEAM=8` | 数据来源位掩码 |
+| `ammo_ratio` | `float64`（**`[0.0, 1.0]`**） | `ammo_valid` (`bool`) | 剩余允许发弹比例（超出 `[0, 1]` 整条拒绝）。按满额发弹基数折算；未解调出敌方弹量或未知时必须置 `ammo_valid=false` |
+| `source` | `uint32` 位掩码 | `SOURCE_REFEREE=1`, `SOURCE_RADAR=2`, `SOURCE_ONBOARD=4`, `SOURCE_TEAM=8` | 数据来源位掩码（常规裁判 `0x0003`/`0x0201` 填 `1`，雷达 §5.7.4 信息波填 `2`） |
+| `heat_ratio` | `float64`（**`[0.0, 1.0]`**） | `heat_valid` (`bool`) | `0x0202` 实时枪口热量比 `heat / max_heat`；`>= 0.75` 时驱动 `PosturePolicy` 优先切入 `"attack"`（3× 散热） |
+| `last_hit_stamp` | `builtin_interfaces/Time` | `last_hit_valid` (`bool`)；独立记忆窗口 `hit_timeout`（默认 **`5.0 s`**） | `0x0206` 装甲板受击源时刻。**防粘滞与合成机制**：① 上游驱动持续重发超过 `hit_timeout` 的历史受击时刻时，`WorldModel` 仅忽略该过期受击时刻而**不拒绝**同包内新鲜的 `hp`/`ammo`/`posture`；② 未收到新 `0x0206` 但本机有效 `hp` 较上一未过期帧下降时，自动以当前 `stamp` 合成 `last_hit_stamp` 兜底 |
+| `hit_armor_id` | `uint8`（`0..5`） | `hit_armor_valid` (`bool`) | `0x0206` 被命中装甲板索引（随 `hit_timeout` 同步过期） |
+| `posture` | `uint8`（`POSTURE_UNKNOWN=0`, `POSTURE_ATTACK=1`, `POSTURE_DEFENSE=2`, `POSTURE_MOVE=3`） | `posture_valid` (`bool`) | `0x020D` 哨兵当前生效姿态（内部映射为 `"attack" \| "defense" \| "move"`；`posture_valid=false` 时忽略 `posture` 字节，`posture_valid=true` 且 `posture=0` 视为未知 `None`） |
+| `posture_enhanced` | `bool` | `posture_enhanced_valid` (`bool`) | `0x020D` 当前是否处于 2027 强化姿态 |
+| `posture_ready_at` | `float64`（`>= 0`） | `posture_ready_valid` (`bool`) | `0x020D` 姿态切换 `5.0 s` 冷却结束就绪时刻（秒） |
+| `posture_time_sec` | `float64[3]`（各分量 `>= 0`） | `posture_time_valid` (`bool`) | `0x020D` 整局累计保持秒数 `[attack_s, defense_s, move_s]`（满 `180.0 s` 触发姿态增益衰减） |
+| `enhanced_used_sec` | `float64[3]`（各分量 `>= 0`） | `enhanced_used_valid` (`bool`) | `0x020D` 整局累计已用强化秒数 `[attack_s, defense_s, move_s]`（每种姿态独立上限 `15.0 s`） |
 
 ### 2.4 `StructureStatus.msg` 与 `StructureState.msg`（话题：`structures/status`）
 
@@ -152,6 +183,10 @@
 | `urgent` | `bool` | 紧急标志：高威胁拦截（`score >= urgent_threat [0.72]`）、强制恢复（低血/低弹锁存态）及安全原因 `HOLD` 为 `true`，可跳过普通防抖直接抢占 |
 | `created_at`, `valid_until` | `builtin_interfaces/Time` | 任务首次创建时刻与租约截止时刻（每次续租刷新为 `world.stamp + task_lease`，默认 **`task_lease = 2.0 s`**；下游若超时未收到有效续租必须停车） |
 | `reason_code` | `string` | 原因码：安全类 `FRAME_MISMATCH` / `LOCALIZATION_INVALID` / `GAME_STATE_UNKNOWN` / `GAME_NOT_RUNNING` / `TEAM_MISMATCH` / `ROBOT_DISABLED`；空候选 `NO_FEASIBLE_TASK`；战术类 `AREA_UNCOVERED` / `BASE_THREAT` / `TEAM_SUPPORT_HIGH` / `FIXED_OUTPOST_RULE` / `LOW_RESOURCES` |
+| `posture` | `string`（附带常量 `POSTURE_ATTACK=1`, `POSTURE_DEFENSE=2`, `POSTURE_MOVE=3`） | 2027 哨兵目标姿态：`"attack"`、`"defense"` 或 `"move"`。**续租无损更新契约**：`Executor._same_definition` 仅校验导航目标键 `(key, goal, yaw)`，因此在同一导航目标续租期间切换姿态或改变小陀螺转速**不会**触发 `IDENTITY_MUTATED` 或重置正在执行的 Nav2 Goal |
+| `posture_enhanced` | `bool` | 2027 强化姿态激活标志（受每种姿态 `15.0 s` 预算与 `5.0 s` 冷却约束；安全 `HOLD` 时恒为 `false`） |
+| `spin_enabled` | `bool` | 响应式反自瞄底盘小陀螺启用标志（受击 `<= 3.5 s`、近战 `<= 7.0 m`、紧急拦截或受击恢复期间置 `true`；安全 `HOLD` 时恒为 `false`） |
+| `spin_rate_rad_s` | `float64` | 目标底盘自旋角速度（`rad/s`，默认 `±7.0 rad/s`，按 `2.2 s` 周期或新受击自动变向；未激活或安全 `HOLD` 时恒为 `0.0`） |
 
 ### 3.2 `tactical/feedback`（`TaskFeedback.msg`）—— 执行反馈与失败点冷却
 
@@ -166,7 +201,25 @@
   - 当收到 **`CANCELED (6)`** 时：清空当前任务引用，确保看门狗取消后恢复时生成新 `task_id`。
   - 当收到 **`SUCCEEDED (4)`** 时：表示机器人已到位进入 `ARRIVED` 驻守态，任务继续正常续租保持驻守。
 
-### 3.3 态势、意图、防区最大威胁与运动许可消息
+### 3.3 `referee/sentry_cmd`（`SentryRefereeCmd.msg`）与 `chassis/spin`（`std_msgs/Float32`）
+
+`decision` 节点在每次发布 `tactical/task`（常规 `2 Hz` 周期、临界状态跳变或新受击时间戳跳变 `< 100 ms` 即时重决策）时，同步以 `RELIABLE` + `VOLATILE` + `KeepLast(1)` 发布以下两条专用控制话题：
+
+1. **`referee/sentry_cmd`（`sentry_interfaces/SentryRefereeCmd`）—— 对接裁判串口 `0x0120`**：
+   - `header`（`std_msgs/Header`）：发布时刻与坐标系；
+   - `posture_code`（`uint8`）：姿态代码（`POSTURE_KEEP=0`, `POSTURE_ATTACK=1`, `POSTURE_DEFENSE=2`, `POSTURE_MOVE=3`，对应 `0x0120` `sentry_cmd` 的 **bits 21–22**）；
+   - `posture`（`string`）：可读姿态名 `"attack" | "defense" | "move"`；
+   - `posture_enhanced`（`bool`）：2027 强化姿态请求标志；
+   - `confirm_revive`（`bool`）：对应 `0x0120` **bit 0**（阵亡后确认免费复活，默认置 `true`）；
+   - `raw_sentry_cmd`（`uint32`）：预打包的 32 位 `0x0120` 掩码，计算规则固定为 **`raw_sentry_cmd = ((posture_code & 0x3) << 21) | int(confirm_revive)`**。外部裁判串口驱动可直接将该 `uint32`（或按需叠加本队买活/兑弹位）打包进小端 `0x0120` 数据帧发送；
+   - `based_on_task_id`（`uint64`）与 `reason_code`（`string`）：关联任务序号与原因码。
+
+2. **`chassis/spin`（`std_msgs/Float32`）与 `velocity_guard` 可选自旋注入**：
+   - `decision` 在 `task.spin_enabled == True` 时输出 `float32(task.spin_rate_rad_s)`（如 `+7.0` 或 `-7.0`），关闭或安全 `HOLD` 时严格输出 `0.0`；
+   - **默认实车接线（`inject_spin_into_cmd_vel:=false`）**：云台随动主控或下位机直接订阅 `chassis/spin` 叠加车体自旋并在云台陀螺仪回路前馈抵消，`velocity_guard` 仅透传限幅后的导航 `nav_cmd_vel`；
+   - **可选 `velocity_guard` 安全门控注入（`inject_spin_into_cmd_vel:=true`）**：适用于无独立随动解算层、希望直接通过 `cmd_vel.angular.z` 驱动小陀螺的全向底盘。`velocity_guard` 额外订阅 `chassis/spin`（超时 `spin_timeout = 1.0 s`，限幅 `max_spin_angular = 8.0 rad/s`），**仅在 `MotionPermit.allowed == True` 且许可未超时（`<= 0.3 s`）时**将有效非零自旋角速度写入 `cmd_vel.angular.z`（即使 `nav_cmd_vel` 已到位停止，仍支持原地驻守自旋）；一旦 `MotionPermit` 撤销或超时，立即清零并强制输出 `(0.0, 0.0, 0.0)`。
+
+### 3.4 态势、意图、防区最大威胁与运动许可消息
 
 - **`world/state`（`WorldState.msg`）**：包含 `world_seq`、`epoch`、`mode`（`"FULL"` 所有外部轨迹可用 / `"PARTIAL"` 部分外部轨迹可用 / `"LOCAL_ONLY"` 无可用外部轨迹但本机健康 / `"SAFE_STOP"` 本机定位失效或超时）、`self_robot` (`RobotTrack`) + `self_valid`、`allies[<=32]`、`enemies[<=32]`、`game` + `game_valid`、`robots[<=64]`、`structures[<=16]` 及兼容字段 `referee` + `referee_valid`。其中 `RobotTrack.status` 取 `OBSERVED=1`（`age <= 0.3 s`）、`PREDICTED=2`（`0.3 s < age <= 0.9 s`）、`STALE=3`（`0.9 s < age <= 5.0 s`），`history[<=128]` 保留最近 `history_sec=3.0 s` 内的观测。
 - **`team/intents`（`TeammateIntentArray.msg` / `TeammateIntent.msg`）**：对每名轨迹可用的队友输出 `robot_id`、`intent_type`（`UNKNOWN=0, ATTACK_OUTPOST=1, DEFEND_BASE=2, CONTEST_AREA=3, RETREAT=4, TRANSIT=5`）、关联 `zone_id`、6 维归一化后验 `probabilities`、`confidence` 与布尔位 `valid`。
@@ -195,7 +248,8 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
 |---|---|---|
 | `self_timeout` | `0.5 s` | 本机定位（TF / `self_pose`）及 `decision`/`executor` 接受 `WorldState` 的最大允许年龄；`localization_ok` 单调时钟超时同样为 `0.5 s`；超时立即进入安全 `HOLD(LOCALIZATION_INVALID)` |
 | `game_timeout` | `2.0 s` | `game/status` 各字段新鲜度窗口；超时后若无未过期兼容 `referee/state`，阶段变为 `UNKNOWN` 并进入安全 `HOLD(GAME_STATE_UNKNOWN)` |
-| `robot_status_timeout` | `2.0 s` | `robots/status` 中每台机器人各状态字段（`hp`、`max_hp`、`alive`、`level`、`ammo`）的有效窗口；超时字段自动归为 `None` |
+| `robot_status_timeout` | `2.0 s` | `robots/status` 中每台机器人常规状态字段（`hp`、`max_hp`、`alive`、`level`、`ammo`、`heat_ratio`、`posture*`）的有效窗口；超时字段自动归为 `None` |
+| `hit_timeout` | `5.0 s` | `robots/status` 中 `last_hit_stamp` 与 `hit_armor_id` 的独立受击记忆窗口（覆盖 `spin_hold_sec = 3.5 s`）；自动忽略上游持续重发的超期历史受击时刻 |
 | `structure_timeout` | `5.0 s` | `structures/status` 中每个建筑各状态字段的有效窗口；超时后归为“存活状态未知（`None`）” |
 | `referee_timeout` | `2.0 s` | 旧版兼容 `referee/state` 消息的有效窗口 |
 | `observed_age` | `0.3 s` | 位置观测年龄 `age <= 0.3 s` 时轨迹状态为 `OBSERVED`（`usable = True`） |
@@ -204,17 +258,17 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
 
 ### 4.3 逐类信息缺失降级行为表
 
-每个决策周期，`sentry_core/inputs.py: assess` 先统计 6 个维度的信息完整度 `completeness`（范围 `[0.0, 1.0]`；注意**已确认阵亡 `known_alive == False` 的机器人自动从期望在场分母 `expected_allies` / `expected_enemies` 中扣除**，不会因对手阵亡离场误判为雷达掉线！），随后按以下规则平滑降级：
+每个决策周期，`sentry_core/inputs.py: assess` 按 RMUC 2027 物理通信边界统计 **7 个正交维度**的信息完整度 `completeness`（范围 `[0.0, 1.0]`：`game`、`self`、`allies`、`enemies`、`ally_status`、`enemy_status`、`structures`；其中 `ally_status` 对应常规裁判 `0x0003` 己方队友血量，雷达全盲时仍保持 `1.0`；`enemy_status` 对应雷达 §5.7.4 信息波敌方血量，雷达掉线时降至 `0.0`；**已确认阵亡 `known_alive == False` 的机器人自动从期望在场分母 `expected_allies` / `expected_enemies` 中扣除**，不会因对手阵亡离场误判为雷达掉线！），随后按以下规则平滑降级：
 
 | 缺失场景 | 定量降级行为与公式 | `missing_info.degraded` 审计标记 |
 |---|---|---|
-| **敌方地面位置部分或全部缺失**（雷达掉线 / 遮挡） | ① 处于 `predicted_age..retention`（`0.9..5.0 s`）的 `STALE` 敌方轨迹保留最后已知位置，权重按 `stale_enemy_weight * (1 - (age - predicted_age) / (retention - predicted_age))`（默认 `stale_enemy_weight = 0.5`）线性衰减至 `0`，按保守速度 `0.7 m/s` 估计防区威胁；<br>② 对所有 `DEFEND_BASE` 防区的 `DEFEND` 候选额外增加紧迫度 `boost = missing_enemy_defense_boost * (1 - completeness["enemies"])`（默认 `missing_enemy_defense_boost = 0.25`），自动收缩稳守关键防区 | `STALE_ENEMY:<id>`<br>`ENEMY_POSITIONS_MISSING:defense+<boost>` |
-| **敌方血量未知**（无裁判敌方血量或未给 `max_hp`） | 威胁选敌优先级 `priority` 不加 `enemy_low_hp_bonus`（`0.15`），退化为纯空间威胁分选敌；若已知 `hp=0` 或 `alive=false` 则直接剔除该敌方 | `ENEMY_HP_UNKNOWN:<id>` |
-| **队友位置缺失或已知阵亡** | ① 忽略过期（`!usable`）或已知阵亡（`known_alive == False`）的队友，针对阵亡队友的支援点直接拒绝（`<goal_id>:ALLY_DOWN`）；<br>② `SUPPORT` 任务的协同项乘缩放因子 `scale = 0.5 + 0.5 * completeness["allies"]`，队友视野不全时降低孤军前压倾向 | `ALLIES_INCOMPLETE:support*<scale>` |
+| **敌方地面位置部分或全部缺失**（雷达掉线 / 遮挡，本机相机视野外） | ① 处于 `predicted_age..retention`（`0.9..5.0 s`）的 `STALE` 敌方轨迹保留最后已知位置，权重按 `stale_enemy_weight * (1 - (age - predicted_age) / (retention - predicted_age))`（默认 `stale_enemy_weight = 0.5`）线性衰减至 `0`，按保守速度 `0.7 m/s` 估计防区威胁；<br>② 对所有 `DEFEND_BASE` 防区的 `DEFEND` 候选额外增加紧迫度 `boost = missing_enemy_defense_boost * (1 - completeness["enemies"])`（默认 `missing_enemy_defense_boost = 0.25`），自动收缩稳守关键防区 | `STALE_ENEMY:<id>`<br>`ENEMY_POSITIONS_MISSING:defense+<boost>` |
+| **敌方血量未知**（雷达 §5.7.4 信息波失锁或未给 `max_hp`，`enemy_status < 1.0`） | 威胁选敌优先级 `priority` 不加 `enemy_low_hp_bonus`（`0.15`），退化为纯空间威胁分选敌；若已知 `hp=0` 或 `alive=false` 则直接剔除该敌方 | `ENEMY_HP_UNKNOWN:<id>` |
+| **队友高频轨迹缺失或已知阵亡**（雷达掉线时仍有 `0x020B` 1 Hz 位置与 `0x0003` `ally_status` 保底） | ① 忽略过期（`!usable`）或已知阵亡（`known_alive == False`）的队友，针对阵亡队友的支援点直接拒绝（`<goal_id>:ALLY_DOWN`）；<br>② `SUPPORT` 任务的协同项乘缩放因子 `scale = 0.5 + 0.5 * completeness["allies"]`，队友视野不全时降低孤军前压倾向 | `ALLIES_INCOMPLETE:support*<scale>` |
 | **前哨站 / 基地存活状态未知或被毁** | 状态未知时视为“存活但未确认”（`alive is None`，绝不当作已摧毁）：`ATTACK_OUTPOST` 区域的 `SUPPORT` 战略价值乘 `unconfirmed_attack_factor = 0.7`；一旦确认敌方前哨被毁（`alive is False`）立即拒绝进攻候选（`<goal_id>:TARGET_DESTROYED`）；一旦确认己方前哨 `own_outpost`（非 `own_base` 的 `DEFEND_BASE` 建筑）被毁，立即将该前哨防区威胁清零并拒绝其 `DEFEND`/`INTERCEPT` 候选（`<goal_id>:TARGET_DESTROYED`），同时主基地 `own_base` 保持生效并获得 `DEFEND` 战略价值 `+0.12` 提升 | `STRUCTURE_UNCONFIRMED:<structure>` |
 | **本机血量 / 弹量 / 补给可用性未知** | `self_hp` 或 `self_ammo` 为 `None` 时拒绝生成 `SUPPORT` 候选（`<goal_id>:RESOURCES_UNCERTAIN_OR_LOW`），仍保留 `DEFEND` 与 `INTERCEPT`（风险项按中性 `hp=0.5` 计）；`supply_available != True` 时不生成 `RECOVER` | 记录于 `decision.rejected` 与 `missing_info.missing` |
-| **队友或敌方位置完整度 `< completeness_threshold`（`0.6`）时离线 RL 降权** | 在线加载离线 RL 模型（`GoalPrior`）时，若 `completeness["allies"] < 0.6` 或 `completeness["enemies"] < 0.6`，自动按 `scale = min(completeness["allies"], completeness["enemies"]) / 0.6` 线性下调本周期混合权重 `effective_blend = rl_blend * scale`；当任一方位置全丢（`0.0`）时 `effective_blend = 0.0`，**自动退回 `SHADOW` 影子模式**（仅记录建议点，既不改变候选排序也不做子目标细化） | `RL_BLEND_REDUCED:INFO_INCOMPLETE:<categories>` |
-| **本机定位失效 / 比赛阶段非 `RUNNING` 或未知 / 阵营不匹配 / 本机阵亡** | 立即输出紧急安全驻守 `HOLD`（`urgent=True`，原因码见 §3.1），执行器撤销运动许可使底盘停稳；**一旦安全条件恢复（如定位恢复或比赛从 `READY` 切入 `RUNNING`），首个决策周期跳过 `min_hold`、`switch_margin` 与 `confirm_cycles`，零延迟切换至最优任务，仲裁状态记为 `SAFETY_RECOVERED`** | 体现于 `task.reason` 与恢复周期的 `decision.arbitration = "SAFETY_RECOVERED"` |
+| **队友或敌方位置完整度 `< completeness_threshold`（`0.6`）时离线 RL 降权** | 在线加载离线 RL 模型（`GoalPrior`）时，若 `completeness["allies"] < 0.6` 或 `completeness["enemies"] < 0.6`，自动按 `scale = min(completeness["allies"], completeness["enemies"]) / 0.6` 线性下调本周期混合权重 `effective_blend = rl_blend * scale`；当任一方位置全丢（`0.0`）时 `effective_blend = 0.0`，**自动退回 `SHADOW` 影子模式**（仅记录建议点与姿态概率，对导航与姿态均零干预） | `RL_BLEND_REDUCED:INFO_INCOMPLETE:<categories>` |
+| **本机定位失效 / 比赛阶段非 `RUNNING` 或未知 / 阵营不匹配 / 本机阵亡** | 立即输出紧急安全驻守 `HOLD`（`urgent=True`，`spin_enabled=False`，`spin_rate_rad_s=0.0`，`posture_enhanced=False`），执行器撤销运动许可使底盘停稳；**一旦安全条件恢复（如定位恢复或比赛从 `READY` 切入 `RUNNING`），首个决策周期跳过 `min_hold`、`switch_margin` 与 `confirm_cycles`，零延迟切换至最优任务，仲裁状态记为 `SAFETY_RECOVERED`** | 体现于 `task.reason` 与恢复周期的 `decision.arbitration = "SAFETY_RECOVERED"` |
 
 ### 4.4 `tactical/trace` 中 `missing_info` 与 `policy_info` 真实字段说明
 
@@ -226,18 +280,16 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
     "completeness": {
       "game": 1.0,
       "self": 1.0,
-      "allies": 0.667,
+      "allies": 1.0,
       "enemies": 0.25,
-      "robot_status": 0.429,
-      "structures": 0.5
+      "ally_status": 1.0,
+      "enemy_status": 0.0,
+      "structures": 1.0
     },
     "missing": [
-      "allies.positions 2/3",
       "enemies.positions 1/4",
       "enemies.103.stale",
-      "robots.hp 3/7",
-      "structure.own_outpost",
-      "structure.enemy_base"
+      "enemies.hp 0/4"
     ],
     "rl_blend": {
       "configured": 0.25,
@@ -248,8 +300,6 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
       "STALE_ENEMY:103",
       "ENEMY_HP_UNKNOWN:103",
       "ENEMY_POSITIONS_MISSING:defense+0.19",
-      "STRUCTURE_UNCONFIRMED:enemy_outpost",
-      "ALLIES_INCOMPLETE:support*0.83",
       "RL_BLEND_REDUCED:INFO_INCOMPLETE:enemies"
     ]
   },
@@ -257,7 +307,7 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
     "goal_scope": "full",
     "algorithm": "iql",
     "model_id": "9f8c...e21a",
-    "dataset_id": "rmuc2026_offline_v1",
+    "dataset_id": "rmuc2027_offline_v2",
     "domain_transfer": false,
     "mirror": false,
     "blend": 0.25,
@@ -267,12 +317,27 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
     "status": "READY",
     "cache_age": 0.0,
     "proposal": [8.42, 7.35],
+    "posture_probs": {"attack": 0.21, "defense": 0.64, "move": 0.15},
+    "enhanced_prob": 0.18,
     "projection_distance_m": 1.5,
     "projected_goal": [8.06, 7.42],
     "subgoal_refined": true,
     "subgoal_reason": "REFINED",
     "subgoal": [8.06, 7.42],
     "subgoal_base": "defend:own_base:0",
+    "posture": {
+      "posture": "defense",
+      "enhanced": false,
+      "cooldown_remaining": 4.8,
+      "posture_time_sec": [12.0, 28.5, 44.0],
+      "enhanced_used_sec": [0.0, 3.5, 0.0],
+      "reason": "THREAT_DEFENSE"
+    },
+    "spin": {
+      "enabled": true,
+      "rate_rad_s": 7.0,
+      "reason": "REACTIVE_HIT"
+    },
     "model_fallbacks": {
       "intent_model": {
         "mode": "rule",
@@ -290,13 +355,15 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
 关键字段说明：
 
 - **`missing_info`**：
-  - `completeness`：6 个信息类别（`game`, `self`, `allies`, `enemies`, `robot_status`, `structures`）当前的可用率 `[0.0, 1.0]`。
-  - `missing`：具体缺失或陈旧的条目清单（如 `enemies.103.stale` 表示 103 号敌车轨迹已超过 `predicted_age` 进入陈旧衰减阶段）。
+  - `completeness`：7 个信息类别（`game`, `self`, `allies`, `enemies`, `ally_status`, `enemy_status`, `structures`）当前的可用率 `[0.0, 1.0]`，精确区分常规机载裁判直连（`ally_status`、`structures`）与雷达无线电信息波（`enemy_status`）。
+  - `missing`：具体缺失或陈旧的条目清单（如 `enemies.103.stale` 表示 103 号敌车轨迹已超过 `predicted_age` 进入陈旧衰减阶段；`enemies.hp 0/4` 表示雷达信息波未解调出敌方血量）。
   - `rl_blend`（仅在配置了 `rl_model` 时出现）：记录配置权重 `configured`、经位置完整度缩放后的 `effective` 以及触发降权的 `reason`。
   - `degraded`：本周期实际生效的所有缺失降级修正项列表（保序去重）。
 - **`policy_info`**（详见 [离线强化学习](offline-rl.md)）：
   - `goal_scope`：当前生效的目标点发布范围约束（`"full"`、`"own_half_and_highland"` 或 `"own_half"`）。
-  - `status`：离线 RL 提议状态，取值包括 `"READY"`、`"SHADOW"`（`effective_blend == 0` 时仅记录不干预，同时附带 `proposal_status`）、`"NO_FEASIBLE_TASK"`、`"OUT_OF_FIELD"`、`"NO_DIRECTION"`、`"PROPOSAL_REACHED"`、`"NO_LEGAL_PROJECTION"` 或 `"INVALID_MODEL_OUTPUT"`。
+  - `posture`：2027 哨兵姿态状态机审计字典，记录本周期输出 `posture`、`enhanced`、剩余切换冷却 `cooldown_remaining`、三姿态整局累计时长 `posture_time_sec`、强化已用时长 `enhanced_used_sec` 与决策原因 `reason`（如 `"SURVIVAL_DEFENSE"`、`"THERMAL_RELIEF_ATTACK"`、`"TRANSIT_MOVE"`、`"COMBAT_ATTACK"`、`"UNDER_FIRE_DEFENSE"`、`"THREAT_DEFENSE"`、`"RESERVE_BUDGET_MOVE"`、`"COOLDOWN_LOCKED"`、`"UNSAFE_HOLD"` 或 `"RL_BLENDED:..."`）。
+  - `spin`：响应式小陀螺状态机审计字典，记录 `enabled`、`rate_rad_s` 与原因 `reason`（`"REACTIVE_HIT"`、`"COMBAT_PROXIMITY"`、`"URGENT_INTERCEPT"`、`"HIT_RECOVER"`、`"UNTHREATENED_TRANSIT"`、`"CALM"` 或 `"UNSAFE:<reason>"`）。
+  - `status`：离线 RL 提议状态，取值包括 `"READY"`、`"SHADOW"`（`effective_blend == 0` 时仅记录不干预，同时附带 `proposal_status`）、`"NO_FEASIBLE_TASK"`、`"OUT_OF_FIELD"`、`"NO_DIRECTION"`、`"PROPOSAL_REACHED"`、`"NO_LEGAL_PROJECTION"` 或 `"INVALID_MODEL_OUTPUT"`；加载 v2（`schema_version = 2`）模型时额外记录 `posture_probs` 与 `enhanced_prob`。
   - `subgoal_refined` 与 `subgoal_reason`：**离线 RL 只细化不篡改合同的审计字段**。仲裁选出胜出任务后，投影合法子目标仅允许细化**非紧急 `SUPPORT` / `DEFEND` 任务**的目标坐标（须满足 `goal_scope`、落在该任务所属区域内或距原规则目标点 `<= goal_update_distance [1.5 m]`、连通可达，且通过冷却与友军间距 `ally_clearance` 检查）。细化成功时 `subgoal_refined=true`、`subgoal_reason="REFINED"`（或在提议暂不可导引时保持已细化点 `"KEPT:<status>"`），并记录 `subgoal` 与原规则点 `subgoal_base`；未细化时 `subgoal_refined=false`，`subgoal_reason` 明确给出 `"NO_RULE_TASK"`、`"URGENT_TASK"`、`"NOT_REFINABLE:INTERCEPT"`、`"NOT_REFINABLE:RECOVER"`、`"OUTSIDE_GOAL_SCOPE"`、`"OUTSIDE_TASK_AREA"`、`"UNREACHABLE"`、`"FAILURE_COOLDOWN"`、`"ALLY_OCCUPIED"` 或当前 `status`。
   - `model_fallbacks`（仅当 `intent_model` 或 `utility_model` 发生安全回退时出现）：例如场地启用 `mirror: auto` 切换到蓝方（`own_team=BLUE`）后 `map_fingerprint` 改变，若仍传入仅在红方场地上训练的 HMM 或效用权重文件，节点不会报错停机，而是自动回退至规则意图估计器或战术文件权重，并在每帧 `model_fallbacks` 中保留完整原因。
 
@@ -306,13 +373,14 @@ SentryWeave 在全部数据链路中严格贯彻 **“未知（`None`）既不�
 
 ### 5.1 示例 A：不依赖 ROS 2 的纯 Python 调用（`sentry_core`）
 
-如果团队自研主控直接在 Python 进程内运行，或希望在无 ROS 2 环境下编写单元测试与仿真器闭环，可直接导入 `sentry_core`，构造 `WorldModel` 与强类型状态对象并调用 `DecisionEngine.step(world)`：
+如果团队自研主控直接在 Python 进程内运行，或希望在无 ROS 2 环境下编写单元测试与仿真器闭环，可直接导入 `sentry_core`，构造 `WorldModel` 与强类型状态对象（含 2027 金币、枪口热量比、受击事件与哨兵姿态）并调用 `DecisionEngine.step(world)`：
 
 ```python
 """Pure-Python SentryWeave example without ROS 2 dependencies."""
 
 from sentry_core.config import load_config
 from sentry_core.model import (
+    POSTURE_CODES,
     SOURCE_ONBOARD,
     SOURCE_RADAR,
     SOURCE_REFEREE,
@@ -337,7 +405,7 @@ def run_pure_python_demo() -> None:
     engine = DecisionEngine(config)
     now = 10.0
 
-    # 1. Normalized referee game status (phase + countdown + supply zone availability).
+    # 1. Normalized referee game status (0x0001 phase/countdown + 0x0208 own_gold).
     world_model.update_game(
         GameState(
             stamp=now,
@@ -347,6 +415,7 @@ def run_pure_python_demo() -> None:
             remaining=360.0,
             supply_available=True,
             source=SOURCE_REFEREE,
+            own_gold=250.0,
         ),
         received_at=now,
     )
@@ -357,11 +426,16 @@ def run_pure_python_demo() -> None:
             robot_id=7,
             team=Team.ALLY,
             stamp=now,
-            hp=400.0,
+            hp=360.0,
             max_hp=400.0,
             alive=True,
             ammo=0.80,
             source=SOURCE_REFEREE,
+            heat_ratio=0.45,
+            last_hit_stamp=now - 0.3,
+            hit_armor_id=1,
+            posture="move",
+            posture_enhanced=False,
         ),
         received_at=now,
     )
@@ -377,7 +451,7 @@ def run_pure_python_demo() -> None:
         ),
         received_at=now,
     )
-    # Partial radar estimate: current hp is known, max_hp and ammo remain None (unknown).
+    # Radar 5.7.4 RF info-wave estimate: enemy hp is known, max_hp and ammo stay None.
     world_model.update_robot(
         RobotStatus(
             robot_id=103,
@@ -390,18 +464,19 @@ def run_pure_python_demo() -> None:
         received_at=now,
     )
 
-    # 3. Structure status: enemy_outpost alive is known even if exact hp is unknown (None).
+    # 3. Structure status (0x0003): both sides' bases and outposts stay on regular referee.
     world_model.update_structure(
         StructureState(name="own_base", stamp=now, hp=5000.0, max_hp=5000.0, alive=True,
                        source=SOURCE_REFEREE),
         received_at=now,
     )
     world_model.update_structure(
-        StructureState(name="enemy_outpost", stamp=now, alive=True, source=SOURCE_REFEREE),
+        StructureState(name="enemy_outpost", stamp=now, hp=1500.0, max_hp=1500.0, alive=True,
+                       source=SOURCE_REFEREE),
         received_at=now,
     )
 
-    # 4. Self pose + ally/enemy ground tracks in the map frame.
+    # 4. Self pose + 0x020B 1 Hz ally UWB track + radar enemy track in the map frame.
     world_model.observe(
         Observation(robot_id=7, team=Team.ALLY, position=Vec2(6.571, 7.5), stamp=now,
                     source_mask=SOURCE_ONBOARD),
@@ -409,7 +484,7 @@ def run_pure_python_demo() -> None:
     )
     world_model.observe(
         Observation(robot_id=3, team=Team.ALLY, position=Vec2(14.5, 4.2), stamp=now,
-                    velocity=Vec2(1.1, -0.2), confidence=0.95, source_mask=SOURCE_RADAR),
+                    velocity=Vec2(1.1, -0.2), confidence=1.0, source_mask=SOURCE_REFEREE),
         received_at=now,
     )
     world_model.observe(
@@ -418,13 +493,15 @@ def run_pure_python_demo() -> None:
         received_at=now,
     )
 
-    # 5. Snapshot the world and step the decision engine.
+    # 5. Snapshot the world, step the decision engine, and pack 0x0120 sentry_cmd.
     world = world_model.snapshot(now)
     decision = engine.step(world)
     task = decision.task
+    raw_0x0120 = ((POSTURE_CODES[task.posture] & 0x3) << 21) | 1
     print(
         f"task={task.kind.name} zone={task.zone_id} goal={task.goal} "
-        f"reason={task.reason} arbitration={decision.arbitration}"
+        f"posture={task.posture} (enh={task.posture_enhanced}, 0x0120={raw_0x0120:#010x}) "
+        f"spin={task.spin_rate_rad_s:+.1f} rad/s reason={task.reason}"
     )
     print("completeness:", decision.missing_info["completeness"])
     print("degraded:", decision.missing_info["degraded"])
@@ -436,14 +513,15 @@ if __name__ == "__main__":
 
 ### 5.2 示例 B：裁判系统串口 + 雷达站 ROS 2 Python 桥接骨架
 
-以下骨架展示如何在 ROS 2 桥接节点中正确配置 **`RELIABLE` QoS**（用于比赛/机器人/建筑状态）与 **`qos_profile_sensor_data`**（用于位置观测），将官方红蓝机器人编号（`1..7` / `101..107`）转换为相对本车的 `ALLY` / `ENEMY`，并严格区分缺失字段有效位：
+以下骨架展示如何在 ROS 2 桥接节点中正确配置 **`RELIABLE` QoS**（用于比赛/机器人/建筑状态与 `referee/sentry_cmd` 订阅）与 **`qos_profile_sensor_data`**（用于 `0x020B` / 雷达位置观测），映射 2027 枪口热量（`0x0202`）、装甲受击（`0x0206`）、哨兵姿态同步（`0x020D`），并订阅 `referee/sentry_cmd` 下发串口 `0x0120` 帧：
 
-> **协议说明**：RoboMaster 官方裁判系统串口协议（帧头 `0xA5`、CRC8/CRC16 校验及各 `cmd_id` 字节偏移）与雷达站队内通信结构会随当季规则手册调整。请将贵队当季串口解包结果填入下方 `on_referee_packet` 与 `on_radar_tracks` 方法中。
+> **协议说明**：RoboMaster 官方裁判系统串口协议（帧头 `0xA5`、CRC8/CRC16 校验及各 `cmd_id` 字节偏移）与雷达站无线电信息波解调结构请对照当季《裁判系统串口协议附录 V2.0.0》填入下方回调方法。
 
 ```python
-"""Skeleton ROS 2 bridge for referee serial packets and radar station tracks."""
+"""Skeleton ROS 2 bridge for RMUC 2027 referee serial packets (0x0001..0x020D, 0x0120) and radar."""
 
 import math
+import struct
 
 from builtin_interfaces.msg import Time
 import rclpy
@@ -460,6 +538,7 @@ from sentry_interfaces.msg import (
     RobotObservation,
     RobotStatus,
     RobotStatusArray,
+    SentryRefereeCmd,
     StructureState,
     StructureStatus,
 )
@@ -510,12 +589,24 @@ class RefereeAndRadarBridge(Node):
         self.tracks_pub = self.create_publisher(
             ObservationArray, "perception/tracks", qos_profile_sensor_data
         )
+        self.sentry_cmd_sub = self.create_subscription(
+            SentryRefereeCmd, "referee/sentry_cmd", self.on_sentry_cmd, LATEST_RELIABLE_QOS
+        )
+
+    def on_sentry_cmd(self, msg: SentryRefereeCmd) -> None:
+        """Pack 0x0120 sentry_cmd payload (bit 0 confirm_revive + bits 21-22 posture_code)."""
+        payload_0x0120 = struct.pack("<I", int(msg.raw_sentry_cmd))
+        self.send_serial_frame(cmd_id=0x0120, payload=payload_0x0120)
+
+    def send_serial_frame(self, cmd_id: int, payload: bytes) -> None:
+        """Replace with your team's 0xA5 + CRC8/CRC16 UART transmitter."""
+        _ = (cmd_id, payload)
 
     def on_referee_packet(self, sample_time_sec: float, parsed: dict) -> None:
         """Map one decoded referee packet using its original sample_time_sec."""
         stamp = ros_stamp(sample_time_sec)
 
-        # 1. GameStatus: leave *_valid=False for any field absent from this packet.
+        # 1. GameStatus (0x0001 stage/countdown + 0x0208 own_gold).
         game = GameStatus()
         game.header.stamp = stamp
         game.header.frame_id = "map"
@@ -538,10 +629,13 @@ class RefereeAndRadarBridge(Node):
         if "supply_available" in parsed:
             game.supply_available = bool(parsed["supply_available"])
             game.supply_valid = True
+        if "own_gold" in parsed:
+            game.own_gold = float(parsed["own_gold"])
+            game.own_gold_valid = True
         game.source = GameStatus.SOURCE_REFEREE
         self.game_pub.publish(game)
 
-        # 2. RobotStatusArray: hp_valid and max_hp_valid are independent!
+        # 2. RobotStatusArray (0x0003 ally HP + 0x0201/0x0202/0x0206/0x0208/0x020D self status).
         robots_msg = RobotStatusArray()
         robots_msg.header.stamp = stamp
         robots_msg.header.frame_id = "map"
@@ -561,13 +655,28 @@ class RefereeAndRadarBridge(Node):
                 robot.ammo_ratio = min(1.0, max(0.0, ratio))
                 robot.ammo_valid = True
             else:
-                robot.ammo_valid = False  # Enemy ammo is unknown, never 0!
+                robot.ammo_valid = False
+            if item.get("heat_ratio") is not None:
+                robot.heat_ratio = min(1.0, max(0.0, float(item["heat_ratio"])))
+                robot.heat_valid = True
+            if item.get("last_hit_time_sec") is not None:
+                robot.last_hit_stamp = ros_stamp(float(item["last_hit_time_sec"]))
+                robot.last_hit_valid = True
+            if item.get("hit_armor_id") is not None:
+                robot.hit_armor_id = int(item["hit_armor_id"])
+                robot.hit_armor_valid = True
+            if item.get("posture_code") in (1, 2, 3):
+                robot.posture = int(item["posture_code"])
+                robot.posture_valid = True
+            if item.get("posture_enhanced") is not None:
+                robot.posture_enhanced = bool(item["posture_enhanced"])
+                robot.posture_enhanced_valid = True
             robot.source = RobotStatus.SOURCE_REFEREE
             robots_msg.robots.append(robot)
         if robots_msg.robots:
             self.robots_pub.publish(robots_msg)
 
-        # 3. StructureStatus: StructureState.hp_valid covers BOTH hp and max_hp!
+        # 3. StructureStatus (0x0003): StructureState.hp_valid covers BOTH hp and max_hp!
         structures_msg = StructureStatus()
         structures_msg.header.stamp = stamp
         structures_msg.header.frame_id = "map"
@@ -592,7 +701,7 @@ class RefereeAndRadarBridge(Node):
             self.structures_pub.publish(structures_msg)
 
     def on_radar_tracks(self, acquisition_time_sec: float, detections: list[dict]) -> None:
-        """Publish radar ground positions with their original acquisition_time_sec."""
+        """Publish radar or 0x020B ground positions with original acquisition_time_sec."""
         array = ObservationArray()
         array.header.stamp = ros_stamp(acquisition_time_sec)
         array.header.frame_id = "map"
@@ -610,7 +719,7 @@ class RefereeAndRadarBridge(Node):
             obs.pose.pose.orientation.w = 1.0
             obs.velocity_valid = False
             obs.confidence = min(1.0, max(0.05, float(det.get("confidence", 0.85))))
-            obs.source_mask = RobotStatus.SOURCE_RADAR
+            obs.source_mask = int(det.get("source_mask", RobotStatus.SOURCE_RADAR))
             array.observations.append(obs)
         if array.observations:
             self.tracks_pub.publish(array)

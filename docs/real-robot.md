@@ -92,35 +92,48 @@ ros2 launch sentry_bringup decision.launch.py \
   trace_path:=/tmp/bench_check.jsonl
 ```
 
-### 2.2 核对 DDS QoS 匹配与自车编号推导
+### 2.2 核对 DDS QoS 匹配、自车编号推导与 `0x0120` / 小陀螺输出话题
 
-另开终端，逐一检查核心输入话题的发布者数量与 QoS 策略：
+另开终端，逐一检查核心输入与 2027 控制输出话题的节点连接与 QoS 策略：
 
 ```bash
 ros2 topic info -v /sentry/game/status
 ros2 topic info -v /sentry/robots/status
 ros2 topic info -v /sentry/structures/status
 ros2 topic info -v /sentry/perception/tracks
+ros2 topic info -v /sentry/referee/sentry_cmd
+ros2 topic info -v /sentry/chassis/spin
 ```
 
 逐项确认：
 1. `/sentry/game/status`、`/sentry/robots/status`、`/sentry/structures/status`（以及开启健康检查时的 `/sentry/localization_ok`）的发布端与订阅端均为 **`Reliability: RELIABLE`** 且 `Publisher count >= 1`（若发布端误用 `BEST_EFFORT`，`world_model` 将收不到任何状态消息！）；
-2. `/sentry/perception/tracks` 为 `BEST_EFFORT`（`SensorDataQoS`）；
-3. 执行 `ros2 topic echo /sentry/world/state --once`，确认 `self_valid: true`、`self_robot.robot_id` 在 `own_team:=RED` 时自动为 `7`（在 `own_team:=BLUE` 时自动为 `107`），且队友/敌方 `team` 字段均正确映射为相对本车的 `ALLY (1)` / `ENEMY (2)`。
+2. `/sentry/perception/tracks` 为 `BEST_EFFORT`（`SensorDataQoS`），可同时承载常规裁判 `0x020B`（1 Hz 己方地面机器人 UWB 位置保底）、本机云台视觉（`SOURCE_ONBOARD=4`）与雷达站全局轨迹（`SOURCE_RADAR=2`）；
+3. `/sentry/referee/sentry_cmd`（`sentry_interfaces/SentryRefereeCmd`）与 `/sentry/chassis/spin`（`std_msgs/Float32`）发布端均为 `RELIABLE`，串口发送桥接节点与云台/底盘随动主控的订阅 QoS 也应匹配；
+4. 执行 `ros2 topic echo /sentry/world/state --once`，确认 `self_valid: true`、`self_robot.robot_id` 在 `own_team:=RED` 时自动为 `7`（在 `own_team:=BLUE` 时自动为 `107`），且队友/敌方 `team` 字段均正确映射为相对本车的 `ALLY (1)` / `ENEMY (2)`。
 
-### 2.3 台架掉线与开赛跳变三项必测演练
+### 2.3 台架掉线、开赛跳变与 `0x0120` 姿态 / 响应式小陀螺四项必测演练
 
-保持实时观察 `/sentry/tactical/trace`（单行 JSON 审计流）与 `/sentry/tactical/task`，在台架上依次模拟以下三种赛场真实异常：
+保持实时观察 `/sentry/tactical/trace`（单行 JSON 审计流）、`/sentry/referee/sentry_cmd` 与 `/sentry/chassis/spin`，在台架上依次验证以下四项赛场核心行为：
 
-1. **拔掉雷达站通信线 / 停发 `perception/tracks`**：
-   - 在断流后 `0.9..5.0 s` 内，`missing_info.degraded` 出现 `STALE_ENEMY:<id>`（利用最后已知敌方位置线性衰减防区威胁，不发生瞬时跳变）；
-   - 超过 `5.0 s` 后，`missing_info.completeness.enemies` 降至 `0.0`，`degraded` 出现 **`ENEMY_POSITIONS_MISSING:defense+0.25`**（自动抬高基地防区驻防紧迫度）；若队友位置同步缺失，出现 **`ALLIES_INCOMPLETE:support*0.50`**；若已挂载离线 RL 模型，同步出现 **`RL_BLEND_REDUCED:INFO_INCOMPLETE:...`**（`effective_blend` 随完整度自动线性降至 `0.0` 影子模式）。
-2. **停发敌方估血或前哨站血量（置对应 `*_valid=false`）**：
+1. **拔掉雷达站通信线（保留常规机载裁判串口 `0x0001..0x020D`）**：
+   - 核对 7 维信息完整度边界：常规机载裁判直连的 `ally_status`（`0x0003` 己方队友血量）、`structures`（`0x0003` 双方基地/前哨站血量）及 `0x020B` 1 Hz 友方位置保持可用，而依赖雷达视觉与 §5.7.4 信息波的 `enemies` 和 `enemy_status` 在超时后降至 `0.0`；
+   - 在断流后 `0.9..5.0 s` 内，`missing_info.degraded` 出现 `STALE_ENEMY:<id>`；超过 `5.0 s` 后出现 **`ENEMY_POSITIONS_MISSING:defense+0.25`**（自动抬高基地防区驻防紧迫度）；若挂载离线 RL 模型，同步出现 **`RL_BLEND_REDUCED:INFO_INCOMPLETE:...`**（`effective_blend` 随视野完整度线性降至 `0.0` 影子模式）。
+2. **停发雷达 §5.7.4 敌方估血或前哨站血量（置对应 `*_valid=false`）**：
    - 观察 `degraded` 记录 `ENEMY_HP_UNKNOWN:<id>` 与 `STRUCTURE_UNCONFIRMED:enemy_outpost`；
    - 确认决策将未知字段严格视为 `None`，既不会把未知血量敌车当作 `0` 血阵亡剔除，也不会把状态未确认的敌方前哨站当作已击毁而放弃推进。
-3. **模拟裁判系统倒计时结束开赛（`GameStatus.phase` 由 `READY` 切 `RUNNING`）**：
-   - `READY` 阶段任务稳定输出紧急 `HOLD`（`reason_code: "GAME_NOT_RUNNING"`）；
-   - 当 `phase` 跳变为 `RUNNING` 的**第一个决策周期**，任务跳过 `min_hold`、`switch_margin` 与 `confirm_cycles` 零延迟立即出击，`tactical/trace` 中 `decision.arbitration` 显示 **`"SAFETY_RECOVERED"`**。
+3. **验证 `/sentry/referee/sentry_cmd`（`0x0120` 姿态切换与 `5.0 s` 冷却）**：
+   - 无威胁巡航或驻守时，默认输出 `posture: "move"`（`posture_code: 3`，`raw_sentry_cmd = (3 << 21) | 1`），保留 `"attack"` 与 `"defense"` 各 `180.0 s` 未衰减额度；
+   - 模拟高枪口热量（`0x0202` `heat_ratio >= 0.75`）或近敌受击，确认 `referee/sentry_cmd` 切换至 `"attack"`（`1`）或 `"defense"`（`2`），且在随后 **`5.0 s` 冷却窗口**（`policy_info.posture.cooldown_remaining > 0`）内严格锁定 `COOLDOWN_LOCKED` 不发生高频抖动；切回 `READY` 安全态时 `posture_enhanced` 立即强制归 `false`，绝不空耗 `3×15.0 s` 强化预算。
+4. **验证 `/sentry/chassis/spin` 受击 `< 100 ms` 瞬时响应与 `READY` 安全归零**：
+   - 在 `RUNNING` 阶段轻敲本机一块装甲板触发 `0x0206`（或模拟本机有效血量下降触发自动合成兜底）：确认 `decision` 跳过 `2 Hz` 等待，在 **`< 100 ms`** 内于 `/sentry/chassis/spin` 立即输出 **`+7.0` 或 `-7.0` `rad/s`**（`policy_info.spin.reason = "REACTIVE_HIT"`），并在持续受击或每隔 `2.2 s` 时自动正负变向；
+   - 将 `GameStatus.phase` 切回 `READY`（或断开 `localization_ok`）：确认 `/sentry/tactical/task` 立即进入紧急 `HOLD`，**`/sentry/chassis/spin` 同一周期立即归零为 `0.0`**（`UNSAFE:GAME_NOT_RUNNING`）；再次切入 `RUNNING` 的首个周期以 `arbitration = "SAFETY_RECOVERED"` 零延迟恢复出击。
+
+### 2.4 底盘小陀螺两种实车接线模式
+
+| 实车下位机架构 | `velocity_guard` 参数配置 | 话题流向与安全边界 |
+|---|---|---|
+| **标准云台随动解算架构（推荐默认）** | `inject_spin_into_cmd_vel:=false`（默认） | `velocity_guard` 仅门控平动导航速度 `nav_cmd_vel -> cmd_vel`；下位机/云台随动节点直接订阅 `/sentry/chassis/spin` 叠加车体自旋并在云台陀螺仪回路做前馈解耦（安全 `HOLD` 时 `chassis/spin` 恒为 `0.0`） |
+| **无独立随动解算层的全向底盘** | `inject_spin_into_cmd_vel:=true`（可调 `max_spin_angular:=8.0`、`spin_timeout:=1.0`） | `velocity_guard` 订阅 `/sentry/chassis/spin`，**仅在 `MotionPermit.allowed == True` 且许可未超时（`<= 0.3 s`）时**将限幅后的自旋角速度注入 `cmd_vel.angular.z`（到位停稳后仍可原地自旋驻守）；一旦 `MotionPermit` 撤销或超时，单调时钟看门狗立即强制向 `cmd_vel` 输出 `(0.0, 0.0, 0.0)` |
 
 ---
 
@@ -159,7 +172,7 @@ ros2 launch sentry_bringup decision.launch.py \
   trace_path:=/abs/path/logs/match_shadow.jsonl
 ```
 
-- **影子模式安全契约**：当 `rl_blend:=0.0` 时，`policy_info.status` 固定为 `"SHADOW"`——**实车运动 100% 仍由阶段 1 已验证的规则策略驱动**（模型既不改变规则候选效用排序，也不细化任何任务目标点），纯 NumPy 策略仅在每帧同步计算短期位移建议并完整写入 `match_shadow.jsonl` 的 `decision.policy_info`。
+- **影子模式安全契约（v1 `73 -> 2` 与 v2 `85 -> 6` 双版本通用）**：当 `rl_blend:=0.0` 时，`policy_info.status` 固定为 `"SHADOW"`——**实车导航移动、2027 哨兵姿态与响应式小陀螺 100% 仍由阶段 1 已验证的规则策略驱动**（模型既不改变规则候选效用排序、不细化任何导航目标点，也不修改姿态或强化开关），纯 NumPy 策略仅在每帧同步计算短期位移建议（v2 模型还会将三姿态概率 `posture_probs` 与强化概率 `enhanced_prob` 写入 `match_shadow.jsonl` 的 `decision.policy_info`）。
 - **赛后离线复盘**：训练赛结束后，在开发机上用 `.venv-rl/bin/sentry-rl replay` 重放实车录制的真实世界快照，零风险评估若开启 `blend=0.25` 时模型对候选排序与子目标细化的具体影响（注意显式指定实车所用的 `--config`，未传时 CLI 默认读取演示配置 `tactics.yaml`；若该局为蓝方对局，传入的战术 YAML 需同样设置 `own_team: BLUE` 以匹配轨迹中的 `map_fingerprint`）：
 
 ```bash
@@ -189,7 +202,7 @@ ros2 launch sentry_bringup decision.launch.py \
 
 上线混合模式时需掌握以下三项工程细则：
 
-1. **严格的只细化不越权边界**：离线 RL 先在相同推进步长上对可行规则候选做路线一致性打分混合；经防抖仲裁选出胜出任务后，投影合法子目标**仅允许微调非紧急 `SUPPORT` / `DEFEND` 任务的目标坐标**（必须落在该任务区域内或距原规则点 `<= 1.5 m`、连通可达，并通过冷却与友军 `0.85 m` 间距检查），**绝不改变胜出任务的类型、战术区域、关联机器人或紧急标志**。一旦细化点导航失败，引擎仅将 `rl_subgoal` 冷却 `5.0 s`，下一周期立即恢复原规则目标点。
+1. **严格的只细化不越权边界（导航 + v2 姿态受约束混合）**：离线 RL 先在相同推进步长上对可行规则候选做路线一致性打分混合；经防抖仲裁选出胜出任务后，投影合法子目标**仅允许微调非紧急 `SUPPORT` / `DEFEND` 任务的目标坐标**（必须落在该任务区域内或距原规则点 `<= 1.5 m`、连通可达，并通过冷却与友军 `0.85 m` 间距检查），**绝不改变胜出任务的类型、战术区域、关联机器人或紧急标志**。当挂载 v2（`85 -> 6`）模型且未触发重伤硬生存保护（`SURVIVAL_DEFENSE`）时，`PosturePolicy` 在 **`5.0 s` 切换冷却、`180.0 s` 衰减保护与 `3×15.0 s` 强化上限**规则屏障内按 `effective_blend` 混合模型姿态与强化偏好（安全 `HOLD` 或非交火/非远距紧急机动时严禁开启强化）。一旦细化导航点失败，引擎仅将 `rl_subgoal` 冷却 `5.0 s`，下一周期立即恢复原规则目标点。
 2. **场地尺寸检查与跨赛季迁移说明**：
    - `tactics_rmuc2027.yaml` 与 `tactics_rmuc2026.yaml` 场地外框均为 **`28.0 × 15.0 m`**，与 RMUC 2026 官方离线数据集尺寸完全相同，因此启动时**无需**开启 `rl_allow_transfer:=true`（仅在 `20 × 12 m` 演示配置 `tactics.yaml` 上实验时才需传 `rl_allow_transfer:=true` 或 `--allow-domain-transfer`）。
    - 但需清醒认识：将基于 2026 区域赛数据训练的 `actor.json` 部署于 2027 赛季新地形属于**跨赛季地形迁移**，依赖 `TacticalMap` 可见图投影与规则屏障兜底；实车比赛推荐结合阶段 2 实录数据持续迭代验证。

@@ -11,7 +11,7 @@
 
 **Open-interface, radar-dropout-resilient cooperative sentry decision making and pure-NumPy onboard offline RL for RoboMaster (ROS 2 Jazzy & pure Python).**
 
-SentryWeave 是面向 RoboMaster 哨兵的**开放输入输出接口、雷达信息缺失鲁棒协同决策与纯 NumPy 机载离线强化学习框架**。系统对多源异步输入做源时间戳与逐字段有效位融合，在雷达掉线或裁判字段残缺时平滑保守降级；结合可解释规则效用、可选 HMM 队友意图估计与基于公开赛事日志训练的 **BC / IQL / Decision Transformer** 模型，输出带租约的合法战术目标，并可与任意 ROS 2 Nav2 栈、`PoseStamped` 自研规划器或纯 Python 主控解耦对接。
+SentryWeave 是面向 RoboMaster 哨兵的**开放输入输出接口、雷达信息缺失鲁棒协同决策与纯 NumPy 机载离线强化学习框架**。系统按 RMUC 2027 物理通信边界对常规机载裁判链路（`0x0001..0x020D`，含 `0x0003` 己方血量/双方建筑、`0x020B` 1 Hz 友方位置保底、`0x0206` 受击、`0x020D` 姿态）与雷达视觉/§5.7.4 无线电信息波做源时间戳与逐字段有效位融合，在雷达掉线或信息波失锁时平滑保守降级；结合可解释规则效用、2027 哨兵三姿态与强化预算状态机（`PosturePolicy`）、受击/近战反自瞄变向小陀螺（`SpinPolicy`）、可选 HMM 队友意图估计以及 **BC / IQL / Decision Transformer**（支持 v1 `73->2` 与 v2 `85->6` 联合导航—姿态），输出带租约的合法战术目标、`0x0120` 裁判指令与安全自旋角速度，可与任意 ROS 2 Nav2 栈、`PoseStamped` 自研规划器或纯 Python 主控解耦对接。
 
 | 项目信息 | 内容 |
 |---|---|
@@ -30,10 +30,10 @@ SentryWeave 不绑定特定战队串口帧或雷达私有协议，外部驱动�
 
 | 输入通道 / 配置 | 类型与建议频率 | `world_model` 订阅 QoS | 可否缺失与缺失时的决策行为 |
 |---|---|---|---|
-| `game/status` | `sentry_interfaces/GameStatus`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | **比赛阶段不可缺失**：`phase` 未知或超时（`> 2.0 s`）立即输出紧急 `HOLD (GAME_STATE_UNKNOWN)`；非比赛期输出 `HOLD (GAME_NOT_RUNNING)`；`own_team` 与配置冲突输出 `HOLD (TEAM_MISMATCH)`。`supply_available` 可缺失（未知或 `false` 时仅停生 `RECOVER`） |
-| `robots/status` | `sentry_interfaces/RobotStatusArray`<br>1–10 Hz | **`RELIABLE`**, Volatile, KeepLast(10) | **可部分或全部缺失**（支持裁判串口、雷达站、队内链路并发按字段合并；`hp_valid` 与 `max_hp_valid` 独立；`team` 恒为相对本车的 `ALLY=1 / ENEMY=2`）：未知作 `None`（绝不当 0 或满值）；敌方血量未知关闭残血选敌加分，本机血量/发弹比例未知禁止激进 `SUPPORT` 但保留 `DEFEND` / `INTERCEPT` |
-| `structures/status` | `sentry_interfaces/StructureStatus`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(10) | **可缺失**（注意单个 `hp_valid` 同时覆盖 `hp` 与 `max_hp`）：双方基地/前哨状态未知（`None`）时视为“存活但未确认”，前哨进攻战略价值乘 `0.7`；确认敌方前哨被毁立即剔除，确认己方前哨（`own_outpost`）被毁立即清零前哨废墟威胁并剔除其驻防/拦截候选（`TARGET_DESTROYED`），同时抬高主基地 `own_base` 驻防战略价值 `+0.12` |
-| `perception/tracks` | `sentry_interfaces/ObservationArray`<br>5–20 Hz | `SensorDataQoS`（**`BEST_EFFORT`**, KeepLast(5)） | **可随时突发断流或丢包**（本机 `ALLY + self_id` 自动忽略，非 `map` 帧按采集时刻查 TF）：`0.9..5.0 s` 陈旧敌方轨迹线性衰减置信度，按敌方视野缺失率自动抬高核心防区紧迫度（最高 `+0.25`），按队友视野完整度缩放 `SUPPORT` 协同项，完整度 `< 0.6` 时按比例下调直至关闭 RL 权重 |
+| `game/status` | `sentry_interfaces/GameStatus`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | **比赛阶段不可缺失**：`phase` 未知或超时（`> 2.0 s`）立即输出紧急 `HOLD (GAME_STATE_UNKNOWN)`；非比赛期输出 `HOLD (GAME_NOT_RUNNING)`；`own_team` 与配置冲突输出 `HOLD (TEAM_MISMATCH)`。`supply_available`、`own_gold`（`0x0208`）与 `enemy_gold`（雷达 §5.7.4）均可缺失 |
+| `robots/status` | `sentry_interfaces/RobotStatusArray`<br>1–10 Hz | **`RELIABLE`**, Volatile, KeepLast(10) | **可部分或全部缺失**（支持常规裁判 `0x0003`/`0x0201`/`0x0202`/`0x0206`/`0x0208`/`0x020D` 与雷达 §5.7.4 信息波并发按字段合并；`hp_valid` 与 `max_hp_valid` 独立；`team` 恒为相对本车的 `ALLY=1 / ENEMY=2`）：涵盖枪口热量比 `heat_ratio`、受击时刻 `last_hit_stamp`（`5.0 s` 窗口，未接 `0x0206` 时支持本机掉血自动合成兜底）与哨兵姿态同步；未知作 `None`，敌方血量未知关闭残血加分，本机血量/弹量未知禁止激进 `SUPPORT` 但保留 `DEFEND` / `INTERCEPT` |
+| `structures/status` | `sentry_interfaces/StructureStatus`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(10) | **可缺失**（常规裁判 `0x0003` 常通；注意单个 `hp_valid` 同时覆盖 `hp` 与 `max_hp`）：双方基地/前哨状态未知（`None`）时视为“存活但未确认”，前哨进攻战略价值乘 `0.7`；确认敌方前哨被毁立即剔除，确认己方前哨（`own_outpost`）被毁立即清零前哨废墟威胁并剔除其驻防/拦截候选（`TARGET_DESTROYED`），同时抬高主基地 `own_base` 驻防战略价值 `+0.12` |
+| `perception/tracks` | `sentry_interfaces/ObservationArray`<br>1–20 Hz | `SensorDataQoS`（**`BEST_EFFORT`**, KeepLast(5)） | **可随时突发断流或丢包**（支持常规裁判 `0x020B` 1 Hz 友方 UWB 位置保底、本机相机 `SOURCE_ONBOARD=4` 与雷达 `SOURCE_RADAR=2` 并发输入；本机 `ALLY + self_id` 自动忽略）：`0.9..5.0 s` 陈旧敌方轨迹线性衰减置信度，按敌方视野缺失率自动抬高核心防区紧迫度（最高 `+0.25`），按队友视野完整度缩放 `SUPPORT` 协同项，完整度 `< 0.6` 时按比例下调直至关闭 RL 权重 |
 | `map -> odom -> base_link`（或 `self_pose`）+ `localization_ok` | TF / `PoseWithCovarianceStamped`（10–50 Hz）<br>`std_msgs/Bool`（5–20 Hz） | TF 标准 / `SensorDataQoS`<br>`localization_ok`：**`RELIABLE`**, KeepLast(1) | **不可缺失**：本机权威定位直接使用定位输出而不做二次平滑，贴墙落入膨胀边缘时由 `arena.origin(pos)` 吸附起点防自锁；超时 `> 0.5 s` 或 `localization_ok=false` 立即进入 `SAFE_STOP`（`HOLD: LOCALIZATION_INVALID`） |
 | 赛季战术与场地配置 | [`tactics_rmuc2027.yaml`](src/sentry_bringup/config/tactics_rmuc2027.yaml) + [`field_rmuc2027.yaml`](src/sentry_bringup/config/field_rmuc2027.yaml) | 启动加载静态文件 | 只声明障碍/规则禁区、建筑、补给区、战术区域与偏好点语义，不锁死移动范围；默认 `mirror: auto` 在 `own_team=BLUE` 时绕场地中心 180° 自动换算并推导 `self_id`（`RED -> 7`、`BLUE -> 107`） |
 | `referee/state` | `sentry_interfaces/RefereeState`<br>1–5 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | **旧版兼容接口（将废弃，可选）**：同一语义字段只要上方新强类型接口有效且未超时，一律以新接口为准 |
@@ -44,13 +44,15 @@ SentryWeave 不绑定特定战队串口帧或雷达私有协议，外部驱动�
 
 | 输出通道 / 动作 | 类型与默认频率 | QoS / 开关 | 语义与下游消费契约 |
 |---|---|---|---|
-| `tactical/task` | `sentry_interfaces/TacticalTask`<br>2 Hz（临界跳变即发） | **`RELIABLE`**, Volatile, KeepLast(1) | 带 `(session_id, task_id)` 与租约截止时刻 `valid_until`（默认 `2.0 s`）的战术指令：`HOLD / SUPPORT / INTERCEPT / DEFEND / RECOVER`、严格满足 `arena.legal(goal)` 的 `map` 系目标位姿 `target_pose`、`urgent` 抢占位与 `reason_code`。下游可通过 `tactical/feedback` 回传 `FAILED / REJECTED / CANCELED / SUCCEEDED` 驱动 `5.0 s` 失败点冷却 |
+| `tactical/task` | `sentry_interfaces/TacticalTask`<br>2 Hz（临界或新受击跳变即发） | **`RELIABLE`**, Volatile, KeepLast(1) | 带 `(session_id, task_id)` 与租约截止时刻 `valid_until`（默认 `2.0 s`）的战术指令：`HOLD / SUPPORT / INTERCEPT / DEFEND / RECOVER`、严格满足 `arena.legal(goal)` 的 `map` 系目标位姿 `target_pose`、2027 哨兵姿态 `posture` / `posture_enhanced` 及小陀螺字段 `spin_enabled` / `spin_rate_rad_s`（续租期间切换姿态或转速不会打断导航 Goal） |
+| `referee/sentry_cmd` | `sentry_interfaces/SentryRefereeCmd`<br>2 Hz（受击/临界跳变即发） | **`RELIABLE`**, Volatile, KeepLast(1) | 2027 哨兵自主裁判指令：输出 `posture_code`（`1=attack, 2=defense, 3=move`）、`posture_enhanced`、`confirm_revive` 与预打包 `0x0120` 32 位掩码 `raw_sentry_cmd = ((posture_code & 0x3) << 21) | int(confirm_revive)` |
+| `chassis/spin` | `std_msgs/Float32`<br>2 Hz（受击 `< 100 ms` 即发） | **`RELIABLE`**, Volatile, KeepLast(1) | 响应式反自瞄小陀螺目标角速度（默认 `±7.0 rad/s`，定时或新受击自动变向）；安全 `HOLD` 或平静态势下恒输出 `0.0` |
 | `world/state` | `sentry_interfaces/WorldState`<br>10 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 多源融合世界快照与运行模式（`FULL / PARTIAL / LOCAL_ONLY / SAFE_STOP`） |
 | `team/intents` | `sentry_interfaces/TeammateIntentArray`<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 在场队友 6 类战术意图（进攻前哨、守家、控区、撤退、机动、未知）概率分布与置信度 |
 | `threat/state` | `sentry_interfaces/ThreatState`<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 各 `DEFEND_BASE` 防区的最大威胁分 `score`（恒取防区内单机威胁最大值，残血奖励仅影响优先锁定的 `enemy_id` 与 `eta_sec`） |
-| `tactical/trace` | `std_msgs/String` / 滚动 JSONL<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 单行 JSON 决策全量审计流，记录 `missing_info`（6 维完整度、缺失项、生效降级动作）、`policy_info`（当前生效 `goal_scope`、RL 提议、有效混合比、子目标细化状态、模型指纹回退 `model_fallbacks`）与单步耗时 `decision_ms` |
+| `tactical/trace` | `std_msgs/String` / 滚动 JSONL<br>2 Hz | **`RELIABLE`**, Volatile, KeepLast(1) | 单行 JSON 决策全量审计流，记录 `missing_info`（7 维完整度 `ally_status`/`enemy_status` 等、缺失项、生效降级动作）、`policy_info`（`goal_scope`、`posture`、`spin`、RL 提议、有效混合比、子目标细化状态、模型指纹回退 `model_fallbacks`）与单步耗时 `decision_ms` |
 | `compute_path_to_pose` / `navigate_to_pose` | Nav2 Action | 默认开启（`enable_executor:=true`） | 内置 `executor` 独占管理整条路径规则合法性预检（可用 `check_path_before_navigate:=false` 关闭）、目标下发、取消与终态确认 |
-| `motion/permit` & `cmd_vel` | `MotionPermit`（20 Hz）<br>`geometry_msgs/Twist`（50 Hz） | 默认开启（`enable_velocity_guard:=true`） | 单调时钟双看门狗：接收导航栈输出的 `nav_cmd_vel`（`0.25 s` 超时）与执行器运动许可（`0.3 s` 超时），限幅门控后输出最终底盘速度 `cmd_vel` |
+| `motion/permit` & `cmd_vel` | `MotionPermit`（20 Hz）<br>`geometry_msgs/Twist`（50 Hz） | 默认开启（`enable_velocity_guard:=true`） | 单调时钟双看门狗：门控 `nav_cmd_vel`（`0.25 s` 超时）与运动许可（`0.3 s` 超时）输出 `cmd_vel`；可选 `inject_spin_into_cmd_vel:=true` 在许可有效期间注入限幅自旋角速度 |
 
 ### 不经过 ROS 2 的纯 Python 进程内调用
 
@@ -78,28 +80,31 @@ decision = engine.step(world_model.snapshot(now=10.0))
 
 ```mermaid
 flowchart LR
-  subgraph Inputs["多源可缺失异步输入"]
+  subgraph Inputs["2027 多源可缺失异步输入"]
     Loc["TF / self_pose<br>+ localization_ok"]
-    Game["game/status<br>(RELIABLE)"]
-    Rob["robots/status &<br>structures/status (RELIABLE)"]
-    Radar["perception/tracks<br>(雷达 / 视觉 SensorData)"]
+    Game["game/status<br>(0x0001/0x0208 · RELIABLE)"]
+    Rob["robots/status & structures/status<br>(0x0003..0x020D + §5.7.4 · RELIABLE)"]
+    Radar["perception/tracks<br>(0x020B 1Hz / 本机视觉 / 雷达)"]
   end
 
-  Loc & Game & Rob & Radar --> WM["WorldModel (10 Hz)<br>源时间戳校验 · 逐字段合并<br>6 维信息完整度评估"]
+  Loc & Game & Rob & Radar --> WM["WorldModel (10 Hz)<br>源时间戳校验 · 掉血受击合成<br>7 维信息完整度评估"]
   WM --> Ctx["队友意图估计 (规则 / HMM)<br>& 防区最大威胁评估"]
   Ctx --> Cand["TacticalMap 动态候选生成<br>凸多边形可见图 · 连通可达投影<br>缺失保守降级效用评分"]
-  WM --> RL["可选纯 NumPy 离线 RL<br>(BC / IQL / DT)<br>完整度不足自动降权至 SHADOW"]
-  Cand & RL --> Arb["防抖保持 · 紧急抢占<br>SAFETY_RECOVERED 零延迟出击<br>非紧急 SUPPORT/DEFEND 区域内细化"]
+  WM --> RL["可选纯 NumPy 离线 RL<br>(BC / IQL / DT · v1 73->2 / v2 85->6)<br>完整度不足自动降权至 SHADOW"]
+  Cand & RL --> Arb["防抖保持 · 紧急抢占 · SAFETY_RECOVERED<br>非紧急 SUPPORT/DEFEND 区域内细化<br>+ PosturePolicy & SpinPolicy"]
   Arb --> Out1["方式一：内置 Executor + Nav2 Action<br>nav_cmd_vel -> velocity_guard -> cmd_vel"]
   Arb --> Out2["方式二：TaskToPoseBridge<br>PoseStamped goal_pose -> 自研规划器"]
-  Arb --> Out3["方式三：自研主控直接订阅<br>TacticalTask / TaskFeedback"]
+  Arb --> Out3["方式三：自研主控 / 串口直接订阅<br>TacticalTask · referee/sentry_cmd (0x0120) · chassis/spin"]
 ```
 
-- **统一“未知”与单调保守降级**：过期或 `*_valid=false` 的字段统一表示为 `None`，既不当作 `0` 血阵亡，也不当作满血安全；已确认阵亡（`known_alive == False`）的机器人自动从期望在场人数分母中扣除，避免将对手减员误判为雷达掉线。当雷达突发中断时，最近 `0.9..5.0 s` 内的敌方最后已知位置按线性衰减权重继续参与威胁计算，基地防区驻防紧迫度按 `0.25 * (1 - completeness["enemies"])` 自动抬升，队友失联时按 `0.5 + 0.5 * completeness["allies"]` 收敛孤军前压倾向。安全原因触发的 `HOLD`（如开赛前 `READY` 或短时定位抖动）在恢复正常的首个周期跳过防抖窗口立即切换最优任务（`SAFETY_RECOVERED`）。
-- **离线 RL“只细化不越权”合同与影子模式**：
-  1. **路线混合**：`GoalPrior` 先在相同推进步长上对可行规则候选计算方向一致性得分，按 `effective_blend` 混合效用；
-  2. **只细化不篡改**：经防抖仲裁选出胜出规则任务后，投影到合法可达空间的 RL 子目标**仅允许微调非紧急 `SUPPORT` / `DEFEND` 任务的目标坐标**（必须落在该任务所属区域内或距原规则点 `<= 1.5 m`、连通可达且满足友军安全间距），**绝不改变胜出任务的类型、区域、关联机器人或紧急属性**；一旦细化坐标导航失败，仅将 `rl_subgoal` 冷却 `5.0 s` 并立即恢复原规则目标点；
-  3. **视野残缺自动退坡与影子采集**：当 `allies` 或 `enemies` 位置完整度低于 `0.6` 时，`effective_blend` 自动按比例下调直至 `0`（退回纯规则）；设置 `rl_blend:=0.0` 即启用**影子模式（`SHADOW`）**——实车运动 100% 由规则策略控制，同时在 `tactical/trace` 中完整记录每帧模型提议供赛后 `sentry-rl replay` 复盘。
+- **真实 2027 通信边界、统一“未知”与单调保守降级**：严格区分常规机载裁判直连（`0x0003` 己方队友血量 `ally_status` 与双方建筑血量、`0x020B` 1 Hz 友方位置保底、`0x0206` 受击与本机掉血合成、`0x020D` 姿态同步）和雷达视觉 / §5.7.4 无线电信息波（`enemies`、`enemy_status` 敌方血量与金币）。过期或 `*_valid=false` 字段统一表示为 `None`，既不当作 `0` 血阵亡，也不当作满血安全；已确认阵亡（`known_alive == False`）的机器人自动从期望在场人数分母中扣除。当雷达突发中断时，最近 `0.9..5.0 s` 内的敌方最后已知位置按线性衰减权重继续参与威胁计算，基地防区驻防紧迫度按 `0.25 * (1 - completeness["enemies"])` 自动抬升，队友失联时按 `0.5 + 0.5 * completeness["allies"]` 收敛孤军前压倾向。
+- **2027 哨兵姿态预算管理（`PosturePolicy`）与响应式变向小陀螺（`SpinPolicy`）**：
+  - `PosturePolicy` 遵循表 5-28 **`5.0 s` 切换冷却、`180.0 s` 衰减保护与 `3×15.0 s` 强化姿态上限**：无威胁机动/驻守保持 `"move"` 预留 `"attack"`（3× 冷却）与 `"defense"`（50% 减伤）未衰减预算，高热（`>= 0.75`）切进攻快冷，重伤撤退强制防御/强化护盾，通过 `referee/sentry_cmd` 直接输出 `0x0120` 掩码；
+  - `SpinPolicy` 在受击（`< 100 ms` 立即重决策，保持 `3.5 s`）、近战（`<= 7.0 m`）或紧急拦截时于 `chassis/spin` 输出 `±7.0 rad/s` 并按 `2.2 s` 或新受击自动变向反自瞄；任何安全 `HOLD`（如 `READY` 或定位超时）下强制零自旋、零强化空耗。
+- **离线 RL“只细化不越权”合同与影子模式（兼容 v1 `73->2` 与 v2 `85->6`）**：
+  1. **路线与受约束姿态混合**：`GoalPrior` 在相同推进步长上对可行规则候选混合效用；v2 模型在非重伤生存覆盖时于冷却与预算屏障内混合三姿态/强化偏好；
+  2. **只细化不篡改**：投影到合法可达空间的 RL 子目标**仅允许微调非紧急 `SUPPORT` / `DEFEND` 任务的目标坐标**（必须落在该任务所属区域内或距原规则点 `<= 1.5 m`、连通可达且满足友军安全间距），**绝不改变胜出任务的类型、区域、关联机器人或紧急属性**；一旦细化坐标导航失败，仅将 `rl_subgoal` 冷却 `5.0 s` 并立即恢复原规则目标点；
+  3. **视野残缺自动退坡与影子采集**：当 `allies` 或 `enemies` 位置完整度低于 `0.6` 时，`effective_blend` 自动按比例下调直至 `0`（退回纯规则）；设置 `rl_blend:=0.0` 即启用**影子模式（`SHADOW`）**——导航与姿态 100% 由规则策略控制，同时在 `tactical/trace` 中完整记录每帧模型提议与姿态概率供赛后 `sentry-rl replay` 复盘。
 
 ---
 
@@ -290,11 +295,11 @@ SentryWeave/
 | 分类 | 文档入口 | 内容概要 |
 |---|---|---|
 | 上手与实车接入 | [入门教程](docs/getting-started.md) | 环境搭建、纯 Python 仿真、离线训练、Docker Jazzy 运行与在线回放全流程 |
-| 上手与实车接入 | [开放输入输出接口与缺失降级规范](docs/interfaces.md) | 全部输入输出消息逐字段契约、`RELIABLE` QoS 红线、有效位差异、定量缺失降级与桥接代码 |
+| 上手与实车接入 | [开放输入输出接口与缺失降级规范](docs/interfaces.md) | 2027 常规裁判 vs 雷达信息波真值表、`SentryRefereeCmd` (`0x0120`)、`chassis/spin`、7 维缺失降级与桥接代码 |
 | 上手与实车接入 | [接入自有导航栈指南](docs/navigation-integration.md) | Nav2 Action、`PoseStamped` 话题桥接、直接消费 `TacticalTask` 三种接线模式、TF/小陀螺约定与排障清单 |
-| 上手与实车接入 | [实车上车教程](docs/real-robot.md) | 赛季场地标定与 `sentry-field`、台架掉线演练、四阶段安全上车（低速规则→影子模式→混合→双边校验）与日志体检 |
-| 设计与算法 | [系统架构](docs/architecture.md) | 模块边界、双时钟隔离、动态候选点生成、防抖状态机与执行器所有权协议 |
-| 设计与算法 | [离线强化学习](docs/offline-rl.md) | RMUC 2026 官方日志管线、73 维合法观测、BC / IQL / DT 训练、纯 NumPy 导出与只细化安全包络 |
+| 上手与实车接入 | [实车上车教程](docs/real-robot.md) | 赛季场地标定与 `sentry-field`、台架 `0x0120`/小陀螺/掉线演练、四阶段安全上车与日志体检 |
+| 设计与算法 | [系统架构](docs/architecture.md) | 模块边界、双时钟隔离、`PosturePolicy`/`SpinPolicy`、动态候选点生成、防抖状态机与执行器所有权协议 |
+| 设计与算法 | [离线强化学习](docs/offline-rl.md) | v1（`73 -> 2`）与 v2（`85 -> 6` 联合导航—姿态）数据合同、BC / IQL / DT 训练、纯 NumPy 导出与只细化安全包络 |
 | 设计与算法 | [学习基线](docs/baselines.md) | 可解释六维规则效用、队友意图 HMM 拟合、闭环效用权重调优与双边 `map_fingerprint` 说明 |
 | 运维与参考 | [部署指南](docs/deployment.md) | 节点参数速查、命名空间与 TF 重映射、禁区掩码生成及故障复位参考 |
 | 运维与参考 | [实验基线](docs/benchmarks.md) | 独立轨迹测试、FQE、受约束闭环、机载单步耗时/内存基准与 Arena-1 RMUC 2027 雷达掉线对照实验 |

@@ -213,7 +213,8 @@ def test_decision_node_publishes_sentry_cmd_and_spin_and_guard_gates_spin(tmp_pa
             executor.spin_once(timeout_sec=0.02)
 
         assert cmds and cmds[-1].posture == "attack"
-        assert cmds[-1].raw_sentry_cmd == (1 << 21)
+        assert cmds[-1].confirm_revive is True
+        assert cmds[-1].raw_sentry_cmd == ((1 << 21) | 1)
         assert spins and abs(spins[-1].data) == pytest.approx(season.spin_speed_rad_s)
         assert tasks and tasks[-1].spin_enabled is True
 
