@@ -16,14 +16,14 @@
 
 ## 可复现的合成数据流程
 
-所有命令在仓库根目录运行；非默认战术地图使用命令前的全局参数：
+离线 CLI `sentry-train` 未指定 `--config` 时默认读取 20×12 m 演示配置 `src/sentry_bringup/config/tactics.yaml`，而在线 `decision.launch.py` 默认加载 28×15 m 赛季配置 `tactics_rmuc2027.yaml`。面向特定赛季场地训练时，请在子命令前传入全局 `--config` 参数：
 
 ```bash
-.venv/bin/sentry-train --config /absolute/path/tactics.yaml generate \
+.venv/bin/sentry-train --config src/sentry_bringup/config/tactics_rmuc2027.yaml generate \
   --episodes-per-class 40 --steps 80 --seed 110 --out artifacts/data/custom.jsonl
 ```
 
-默认示例直接执行 README 的完整训练流程。训练生成：
+默认示例直接执行完整训练流程。训练生成：
 
 | 文件 | 内容 |
 |---|---|
@@ -37,8 +37,12 @@
 轨迹共享 group_id。真实数据应以整场比赛/独立采集任务分组，不能把相邻帧随机打散。
 温度、权重选择只使用验证集；独立评测种子不能出现在权重搜索中。
 
-HMM 六个类别都需要至少两个训练样本，实际训练应远多于此。JSON 加载器会拒绝不兼容特征、
-错误地图指纹、非有限参数、负方差和非法概率矩阵。改变场地几何后需要重新生成特征和训练。
+HMM 六个类别都需要至少两个训练样本，实际训练应远多于此。JSON 加载器会严格拒绝不兼容特征、
+非有限参数、负方差和非法概率矩阵。对 `map_fingerprint` 的处理在离线与在线两侧有意区分：
+
+- **离线训练与评测严格报错**：`sentry-train` 加载 `intent.json` 或 `utility.json` 时若检测到 `map_fingerprint` 与当前配置不同，直接抛出 `MapFingerprintMismatch`，防止混用其他地图的模型污染实验报告。
+- **在线 `decision` 节点自动安全回退（`model_fallbacks`）**：线上比赛环境若挂载的模型指纹与当前加载场地不一致（例如修改场地文件后尚未重训，或错挂另一侧模型），`load_decision_models` **不会中断节点**，而是自动将该组件回退为规则意图估计器（`rule intent estimator`）或战术文件中的默认效用权重（`utility weights of the tactics file`），同时输出启动告警并在每周期 `tactical/trace` 的 `policy_info["model_fallbacks"]` 中持续记录回退原因（`MAP_FINGERPRINT_MISMATCH`）与双边指纹。
+- **`mirror: auto` 红蓝双边分别训练**：当场地启用 `mirror: auto`（如 `tactics_rmuc2027.yaml`）时，`own_team=BLUE` 在加载阶段绕场地中心 180° 镜像后的 `Config.map_fingerprint` 与 `RED` 不同。若双边比赛均需启用 HMM 意图模型或调优效用权重，应分别按红方与蓝方配置提取特征、训练并挂载对应阵营产物（相比之下，离线 RL 模型 `actor.json` 通过 `rl_mirror=auto` 做中心对称规范化，单份模型红蓝通用）。双边校验流程见 [实车上车教程](real-robot.md)。
 
 ## 真实数据工作流
 
@@ -46,7 +50,8 @@ HMM 六个类别都需要至少两个训练样本，实际训练应远多于此�
 
 ```bash
 ros2 launch sentry_bringup decision.launch.py namespace:=sentry \
-  config_file:=/absolute/path/tactics.yaml \
+  own_team:=RED \
+  config_file:=/absolute/path/tactics_rmuc2027.yaml \
   trace_path:=/absolute/path/logs/match_01.jsonl
 ```
 
@@ -71,7 +76,7 @@ JSONL 包含完整 World、每个队友的特征/概率、所有可行候选、�
 拒绝重叠标签；未标注不等于 UNKNOWN。重复观测去重，失联、身份重建或长空隙会分段。
 
 ```bash
-.venv/bin/sentry-train --config /absolute/path/tactics.yaml extract \
+.venv/bin/sentry-train --config /absolute/path/tactics_rmuc2027.yaml extract \
   --trace /absolute/path/logs/match_01.jsonl \
   --annotations /absolute/path/labels/match_01.json \
   --out artifacts/data/match_01.jsonl

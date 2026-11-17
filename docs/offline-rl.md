@@ -113,52 +113,68 @@ FQE 仅支持同域 Markov BC/IQL，在训练数据拟合 critic，在测试片�
 ## 在线使用
 
 ```text
-模型短期建议
-  → 比较相同行进距离上的可达候选路点
-  → 混合原效用
-  → 防抖 / 紧急仲裁
-  → Nav2
+73 维合法观测 → 纯 NumPy 模型短期位移建议
+  → 按队友 / 敌方位置完整度缩放 effective_blend（< 0.6 按比例降低，0 时退回 SHADOW）
+  → 投影至同连通分量最近合法点，并在相同推进距离上混合各可行规则候选效用
+  → 防抖保持 / 紧急抢占 / SAFETY_RECOVERED 仲裁选出胜出任务
+  → 仅允许细化已胜出的非紧急 SUPPORT / DEFEND 任务区域内目标坐标
+  → Nav2 或下游导航栈执行（细化点失败仅冷却 rl_subgoal 并立即恢复原规则点）
 ```
 
-模型不新增任意目标，不覆盖资源、定位、禁区和导航所有权约束。
-已到达/越过或方向不充分的建议回到原效用，防止旧建议将机器人向后拉。
+模型在双层安全包络内工作，不覆盖资源、定位、规则禁区或导航所有权约束：
+1. **路线效用混合**：`GoalPrior.rank` 比较模型投影子目标与各可行规则候选在相同推进距离上的路线接近度，按 `effective_blend` 混合原规则效用；模型建议本身绝不作为独立候选加入任务列表。
+2. **胜出后只细化合同（Refine-Only）**：仲裁选出胜出任务后，投影合法子目标**仅允许细化已胜出的非紧急 `SUPPORT` 或 `DEFEND` 任务的目标坐标**（必须落在该任务区域内或距原规则目标 `<= 1.5 m` 即 `goal_update_distance`、可见图可达且通过失败冷却与友军间距 `ally_clearance` 检查），**绝不改变胜出任务的类型、区域、关联机器人 ID 或紧急属性**。已到达/越过（`PROPOSAL_REACHED`）或方向不充分（`NO_DIRECTION`）的建议在排序时回退原效用，而对已细化的当前任务保留既有合法子目标直至正常仲裁切换，防止旧建议将机器人向后拉。
+3. **信息残缺自动缩放**：当 `allies` 或 `enemies` 位置完整度低于 `completeness_threshold`（默认 `0.6`）时，引擎按 `min(completeness) / 0.6` 自动下调当周期 `effective_blend` 直至 `0`（退回 `SHADOW`，同时禁止子目标细化）。
 
 | 参数 | 含义 |
 |---|---|
-| `rl_model` | actor.json 路径；空值使用原策略 |
-| `rl_blend` | 0 为影子；0.25 为混合起点；1 为可行候选内模型主导 |
-| `rl_mirror` | 是否将当前地图做蓝方 180° 变换 |
-| `rl_allow_transfer` | 显式允许场地尺寸不一致，用于研究性域迁移 |
+| `rl_model` | `actor.json` 路径；空值使用纯规则效用策略 |
+| `rl_blend` | `[0, 1]` 混合上限：`0` 为影子模式；`0.25` 为默认混合起点；`1` 为可行规则候选内模型主导（位置残缺时自动下调 `effective_blend`） |
+| `rl_mirror` | 三态字符串 `"auto" \| "true" \| "false"`（默认 `"auto"`，跟随场地 `config.mirrored` 自动在蓝方镜像场地做 180° 特征/动作规范化；`"true"` / `"false"` 强制开启或关闭） |
+| `rl_allow_transfer` | 显式允许场地外框尺寸与训练数据（28×15 m）不一致时的研究性域迁移 |
 
-影子模式保留规则任务，规则仍可导航。`policy_info`、`rule_utility` 和
-`learned_utility` 记录模型影响。DT 历史只记录已经发生的位移，不记录尚未执行的未来动作。
+> **直接 `ros2 run` 传参提示**：`rl_mirror` 为字符串参数。通过 `ros2 launch` 传 `rl_mirror:=auto` 或 `rl_mirror:=true` 即可；若直接运行 `ros2 run sentry_ros decision --ros-args -p "rl_mirror:='true'"`，必须为 `'true'` / `'false'` 加上内层单引号，防止被 ROS CLI 解析为布尔型。
 
-示例场地与官方数据尺寸不同，运行集成实验需要显式选择域迁移：
+影子模式（`rl_blend:=0.0`）保留规则任务与规则目标点，原规则仍正常驱动机器人导航；`policy_info`（含 `effective_blend`、`subgoal_refined`、`subgoal_reason`）、`rule_utility` 和 `learned_utility` 完整记录模型反事实影响。DT 上下文只记录已经发生的真实位移，不记录尚未执行的未来动作。
 
-```bash
-ros2 launch sentry_bringup decision.launch.py \
-  rl_model:="$PWD/artifacts/rl/runs/iql-seed7/actor.json" \
-  rl_blend:=0.25 rl_allow_transfer:=true \
-  trace_path:="$PWD/artifacts/rl/decisions.jsonl"
-```
+**默认 28×15 m 赛季场地 vs 20×12 m 演示场地**：
+- `decision.launch.py` 与各 ROS 2 节点默认加载 `tactics_rmuc2027.yaml`（28×15 m，与 RMUC 2026 官方数据场地外框尺寸一致），因此默认启动**无需**开启 `rl_allow_transfer:=true`（但将 RMUC 2026 模型用于 RMUC 2027 场地在障碍物拓扑与规则上仍属**跨赛季迁移**，建议按 [实车上车教程](real-robot.md) 先以 `rl_blend:=0.0` 影子模式验证）：
+  ```bash
+  ros2 launch sentry_bringup decision.launch.py \
+    own_team:=RED \
+    rl_model:="$PWD/artifacts/rl/runs/iql-seed7/actor.json" \
+    rl_blend:=0.25 rl_mirror:=auto \
+    trace_path:="$PWD/artifacts/rl/decisions.jsonl"
+  ```
+- 仅在显式加载 20×12 m 参考演示场地 `tactics.yaml` 时，需要显式开启 `rl_allow_transfer:=true`：
+  ```bash
+  ros2 launch sentry_bringup decision.launch.py \
+    config_file:="$PWD/src/sentry_bringup/config/tactics.yaml" \
+    rl_model:="$PWD/artifacts/rl/runs/iql-seed7/actor.json" \
+    rl_blend:=0.25 rl_allow_transfer:=true \
+    trace_path:="$PWD/artifacts/rl/decisions_demo.jsonl"
+  ```
 
-实车还需确认地图单位、原点、轴向、侧别和当季规则；尺寸匹配不能证明数据分布匹配。
+实车还需确认地图单位、原点、轴向、侧别和当季规则；外框尺寸一致不代表障碍与战术分布一致。
 
 ## 闭环与回放
+
+离线 CLI `sentry-rl closed-loop` 与 `sentry-rl replay` 未指定 `--config` 时默认读取 20×12 m 演示配置 `src/sentry_bringup/config/tactics.yaml`（需加 `--allow-domain-transfer`）；若回放默认 `tactics_rmuc2027.yaml`（28×15 m）录制的在线日志，显式传入 `--config src/sentry_bringup/config/tactics_rmuc2027.yaml` 即可（无需 `--allow-domain-transfer`）：
 
 ```bash
 .venv-rl/bin/sentry-rl closed-loop \
   --actors artifacts/rl/runs/iql-seed7/actor.json \
+  --config src/sentry_bringup/config/tactics.yaml \
   --seeds 701,702,703 --blend 0.25 --allow-domain-transfer \
   --out artifacts/rl/closed-loop.json
 
 .venv-rl/bin/sentry-rl replay \
   --actor artifacts/rl/runs/iql-seed7/actor.json \
   --trace artifacts/rl/decisions.jsonl \
-  --allow-domain-transfer --blend 0.25
+  --config src/sentry_bringup/config/tactics_rmuc2027.yaml \
+  --blend 0.25 --mirror auto
 ```
 
-回放需要匹配配置、混合比例和侧别；必要时提供 `--mirror`、
-`--intent-model` 和 `--utility-model`。日志位置来自原记录，不能将反事实回放当成新策略的闭环收益。
+回放需要匹配配置、混合比例和侧别：`--mirror` 支持 `auto | true | false`（默认 `auto` 跟随场地配置镜像；单独写 `--mirror` 等价于 `--mirror true`）；若原运行挂载了 HMM 或效用权重模型，也应提供 `--intent-model` 和 `--utility-model`。日志中的机器人位置来自原记录，不能将反事实回放当成新策略的闭环收益。
 
-公开的参考实验设置与结果见 [实验基线](benchmarks.md)。
+公开的参考实验设置、机载纯 NumPy 耗时与雷达缺失鲁棒性结果见 [实验基线](benchmarks.md)。

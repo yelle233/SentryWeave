@@ -39,7 +39,7 @@ python3 -m venv .venv
 没有 ROS/PyTorch 时，相应测试会显示 skipped；跳过的部分没有被该次运行验证。
 
 任务编码为 HOLD=0、SUPPORT=1、INTERCEPT=2、DEFEND=3、RECOVER=4。
-模型之后只参与这些合法候选的评分，导航执行器仍管理实际移动。
+模型之后只参与可行规则候选的路线效用混合，并仅允许在区域内细化已胜出的非紧急 `SUPPORT`/`DEFEND` 目标坐标（绝不篡改胜出任务类型），导航执行器仍管理实际移动。
 
 ## 3. 建立训练环境
 
@@ -272,8 +272,7 @@ docker run --rm sentryweave:main bash tools/ros_exec.bash python3 -m pytest test
 容器中会实际运行 ROS Action 与 Nav2 控制器配置测试；镜像不含 PyTorch，训练相关测试显示 skipped。
 代码修改后需要重新构建镜像。
 
-`decision.launch.py` 启动 `world_model`、`decision`、`executor` 和 `velocity_guard`，
-不包含定位、感知、Nav2 或仿真。查看全部参数：
+`decision.launch.py` 默认启动 `world_model`、`decision`、`executor` 和 `velocity_guard`（不包含定位、感知、Nav2 或仿真），默认加载 28×15 m 赛季配置 `tactics_rmuc2027.yaml`（`schema_version: 2` + `field_rmuc2027.yaml` 凸多边形场地语义与 `mirror: auto`，自动按 `own_team=RED -> self_id=7`、`BLUE -> 107` 推导自车编号），并提供 `enable_executor`、`enable_velocity_guard`、`check_path_before_navigate` 等导航解耦开关。查看全部参数：
 
 ```bash
 docker run --rm sentryweave:main bash tools/ros_exec.bash \
@@ -282,21 +281,36 @@ docker run --rm sentryweave:main bash tools/ros_exec.bash \
 
 ## 10. 在决策链中加载模型
 
+`decision.launch.py` 默认使用 28×15 m 的 `tactics_rmuc2027.yaml`，与 RMUC 2026 官方数据训练模型的外框尺寸一致，因此默认启动可直接加载 `actor.json`（无需 `rl_allow_transfer:=true`，`rl_mirror:=auto` 会随 `own_team` 自动处理蓝方 180° 镜像；但 2026 模型用于 2027 场地仍属跨赛季迁移）：
+
 ```bash
 mkdir -p artifacts/live
 docker run --rm -it --name sentryweave-decision \
   -v "$PWD/artifacts:/ws/artifacts" \
   sentryweave:main bash tools/ros_exec.bash \
   ros2 launch sentry_bringup decision.launch.py \
+  own_team:=RED \
   rl_model:=/ws/artifacts/rl/runs/iql-seed7/actor.json \
-  rl_blend:=0.25 rl_allow_transfer:=true \
+  rl_blend:=0.25 rl_mirror:=auto \
   trace_path:=/ws/artifacts/live/decisions.jsonl
 ```
 
+若改用 20×12 m 参考演示场地 `tactics.yaml`，则需显式传入 `config_file` 与 `rl_allow_transfer:=true`：
+
+```bash
+docker run --rm -it --name sentryweave-decision \
+  -v "$PWD/artifacts:/ws/artifacts" \
+  sentryweave:main bash tools/ros_exec.bash \
+  ros2 launch sentry_bringup decision.launch.py \
+  config_file:=/ws/src/sentry_bringup/config/tactics.yaml \
+  rl_model:=/ws/artifacts/rl/runs/iql-seed7/actor.json \
+  rl_blend:=0.25 rl_allow_transfer:=true \
+  trace_path:=/ws/artifacts/live/decisions_demo.jsonl
+```
+
 宿主机 `artifacts/...` 在容器中对应 `/ws/artifacts/...`。
-日志出现 `Decision ready: intent=rule, goal=iql` 表示模型已加载；
-`rl_allow_transfer` 显式允许 28×15 m 官方数据模型用于默认 `tactics.yaml` 的 20×12 m 示例场地。
-尚未接入定位、裁判和 Nav2 时，任务保持 HOLD，运动许可为 false。
+日志出现 `Decision ready: intent=rule, weights=tactics, goal=iql; map=rmuc2027` 表示模型已加载；
+尚未接入定位、比赛状态和 Nav2 时，任务保持 `HOLD`，运动许可为 `false`。
 
 第二个终端检查：
 
@@ -305,8 +319,8 @@ docker exec sentryweave-decision bash tools/ros_exec.bash ros2 topic echo /sentr
 docker exec sentryweave-decision bash tools/ros_exec.bash ros2 topic echo /sentry/motion/permit --once
 ```
 
-查看 `tactical/trace` 或 JSONL 中的 `policy_info`，了解建议、模型 ID 和回退原因。
-`used=false` 可能表示小位移、建议已到达或约束回退，不一定是加载失败。
+查看 `tactical/trace` 或 JSONL 中的 `policy_info` 与 `missing_info`，了解模型建议、`effective_blend`、`subgoal_refined` 与回退原因。
+`used=false` 可能表示小位移、建议已到达、信息残缺退回 `SHADOW` 或约束回退，不一定是加载失败。
 
 将 `rl_blend:=0.0` 可启用影子模式；**原规则仍可驱动机器人**。
 完全不控制机器人时使用离线回放。
@@ -317,37 +331,36 @@ docker exec sentryweave-decision bash tools/ros_exec.bash ros2 topic echo /sentr
 docker kill --signal=SIGINT sentryweave-decision
 ```
 
-使用相同配置与模型回放记录：
+使用与在线录制相同的配置、混合比例与镜像设置回放记录（`--mirror` 取 `auto | true | false`，默认 `auto` 跟随场地镜像；回放 20×12 m `tactics.yaml` 日志时另加 `--config src/sentry_bringup/config/tactics.yaml --allow-domain-transfer`）：
 
 ```bash
 .venv-rl/bin/sentry-rl replay \
   --actor artifacts/rl/runs/iql-seed7/actor.json \
   --trace artifacts/live/decisions.jsonl \
-  --config src/sentry_bringup/config/tactics.yaml \
-  --blend 0.25 --allow-domain-transfer
+  --config src/sentry_bringup/config/tactics_rmuc2027.yaml \
+  --blend 0.25 --mirror auto
 ```
 
-使用蓝方变换时加 `--mirror`；若原运行加载 HMM/效用模型，也提供对应参数。
+若原运行加载了 HMM 意图模型或训练效用权重，回放时也提供 `--intent-model` / `--utility-model`。
 
 ## 11. 接入实车与导航栈
 
-设备侧需要定位、里程计、障碍输入、定位健康和规范化雷达/裁判消息。
-模型只消费这些状态，不直接解析官方串口字节或相机图片。
+设备侧需要定位、里程计、障碍输入、定位健康和规范化比赛/机器人/建筑/雷达消息。
+决策与模型只消费这些开放状态，不直接解析官方串口字节或相机原始图像。
 
-先按 [部署指南](deployment.md) 对齐：
+建议按以下四篇文档依次完成接入与上车：
+- **[开放输入输出接口](interfaces.md)**：核对 `game/status`、`robots/status`、`structures/status`（**必须使用 `RELIABLE` QoS**）与 `perception/tracks` 的字段契约、有效位差异、超时与雷达掉线降级表，可直接复用文中的裁判/雷达桥接骨架。
+- **[接入自有导航栈](navigation-integration.md)**：按团队技术栈选择三种模式——① 标准 Nav2 Action（内置 `executor` + `velocity_guard`，支持 `check_path_before_navigate` 开关与 `KeepoutFilter` 掩码生成）；② `PoseStamped` 目标话题规划器（`enable_executor:=false enable_velocity_guard:=false` + 去重桥接节点）；③ 自研主控直接订阅 `tactical/task` 或纯 Python 调用 `DecisionEngine.step(world)`。
+- **[实车上车教程](real-robot.md)**：标定赛季凸多边形场地语义、运行 `.venv/bin/sentry-field` 红蓝双向静态校验、完成台架雷达掉线演练，并按“纯规则低速 → `rl_blend:=0.0` 影子模式记录 → `rl_blend:=0.25` 受约束混合 → 双边模型校验”四阶段安全上车。
+- **[部署指南](deployment.md)**：核对命名空间、TF、rosbag2 录制回放与故障复位（`/sentry/executor/reset_fault`）：
+  1. `map/odom/base_link`、源时间戳、红蓝阵营（`own_team`）和地面机器人官方 ID；
+  2. 实际场地 `bounds`、凸多边形障碍/禁区、语义区域与偏好点；
+  3. 底盘速度、加速度、footprint、速度仲裁和下位机硬件超时停车；
+  4. 比赛阶段、资源有效位和补给条件；
+  5. 训练坐标与实际地图的单位、轴向、原点和红蓝镜像侧别。
 
-1. `map/odom/base_link`、源时间戳和地面机器人 ID；
-2. 实际场地 bounds、禁区与候选点；
-3. 底盘速度、加速度、footprint、速度仲裁和硬件超时；
-4. 比赛阶段、资源有效位和补给条件；
-5. 训练坐标与实际地图的单位、轴向、原点和侧别。
-
-已有导航栈时只启动 `decision.launch.py`：导航栈提供 `navigate_to_pose` 与 `compute_path_to_pose`，
-速度输出接到 `nav_cmd_vel`，由 `velocity_guard` 独占 `cmd_vel`。
-`robot.launch.py` 则同时启动参考 Nav2 与决策链。
-
-模型尺寸检查失败时，应处理坐标/数据域问题，不能只修改数字绕过检查。
-2027 等新赛季即使场地尺寸相同，也需要重新验证地图、规则和数据分布。
+模型外框尺寸检查失败时，应处理坐标/数据域问题，不能只修改数字绕过检查。
+2027 等新赛季即使场地尺寸与 2026 相同（28×15 m），也需要重新验证障碍布局、当季规则和数据分布。
 
 ## 常见问题
 
@@ -361,9 +374,9 @@ docker kill --signal=SIGINT sentryweave-decision
 | actor 与 dataset ID 不一致 | 用训练时对应的数据评测，不手改校验字段 |
 | 容器找不到模型 | 检查挂载、工程根目录和 `/ws/artifacts` 路径 |
 | 代码修改未生效 | 重新构建镜像；更换权重后重新启动节点 |
-| 机器人 HOLD | 检查定位、裁判阶段、时间戳、有效位和数据新鲜度 |
+| 机器人 HOLD | 检查定位、比赛阶段、状态话题是否为 `RELIABLE` QoS、源时间戳、有效位和数据新鲜度 |
 | 到位后不重发 Goal | 驻守任务保持相同身份是正常行为 |
 | 暂停/重置仿真后停止 | 检查时钟与执行故障，恢复后按部署文档清理或重启 |
 
-当前结果支持研究、影子记录与受约束实验，尚不支持直接宣称战术收益提升。
-更多说明见 [实验基线](benchmarks.md)、[部署](deployment.md)、[离线学习](offline-rl.md)。
+当前结果支持研究、影子记录与受约束实验，尚不支持直接宣称真实比赛胜率提升。
+更多说明见 [实验基线](benchmarks.md)、[开放接口](interfaces.md)、[导航栈接入](navigation-integration.md)、[实车上车](real-robot.md)、[部署](deployment.md)、[离线学习](offline-rl.md)。
