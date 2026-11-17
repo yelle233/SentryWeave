@@ -10,7 +10,14 @@ import sqlite3
 import numpy as np
 
 from sentry_core.model import Phase, Referee, Team, Track, TrackStatus, Vec2, World
-from sentry_core.navigation_features import FEATURE_NAMES, FEATURE_VERSION, NavigationSpec, encode_world
+from sentry_core.navigation_features import (
+    FEATURE_NAMES,
+    FEATURE_VERSION,
+    FEATURE_VERSION_V2,
+    NavigationSpec,
+    encode_world,
+    feature_names_for,
+)
 
 
 GROUND_ROLES = (1, 2, 3, 4, 7)
@@ -357,23 +364,30 @@ def read_split(directory, split, verify=True):
     if split not in SPLITS:
         raise ValueError("unknown split")
     directory = Path(directory)
-    metadata = json.loads((directory / "metadata.json").read_text())
-    if (metadata.get("schema_version") != 1 or metadata.get("feature_version") != FEATURE_VERSION
-            or metadata.get("feature_names") != list(FEATURE_NAMES)):
+    metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+    schema = metadata.get("schema_version")
+    feat_ver = metadata.get("feature_version")
+    if (schema, feat_ver) not in ((1, FEATURE_VERSION), (2, FEATURE_VERSION_V2)):
         raise ValueError("offline dataset feature schema mismatch")
+    expected_names = list(feature_names_for(feat_ver))
+    if metadata.get("feature_names") != expected_names:
+        raise ValueError("offline dataset feature schema mismatch")
+    action_dim = 2 if schema == 1 else 6
     path = directory / f"{split}.npz"
     if verify and file_hash(path) != metadata["splits"][split]["sha256"]:
         raise ValueError("offline dataset checksum mismatch")
     with np.load(path, allow_pickle=False) as data:
         arrays = {name: data[name] for name in (*ARRAY_NAMES, "episode_ids", "roles")}
     n = len(arrays["actions"])
-    if (arrays["obs"].shape != (n, len(FEATURE_NAMES))
-            or arrays["next_obs"].shape != arrays["obs"].shape
-            or arrays["actions"].shape != (n, 2)
-            or any(len(a) != n or not np.isfinite(a).all() for a in arrays.values())
-            or not ((arrays["discounts"] >= 0) & (arrays["discounts"] <= 1)).all()):
+    if (
+        arrays["obs"].shape != (n, len(expected_names))
+        or arrays["next_obs"].shape != arrays["obs"].shape
+        or arrays["actions"].shape != (n, action_dim)
+        or any(len(a) != n or not np.isfinite(a).all() for a in arrays.values())
+        or not ((arrays["discounts"] >= 0) & (arrays["discounts"] <= 1)).all()
+    ):
         raise ValueError("invalid offline transition arrays")
-    episodes = json.loads((directory / f"{split}.episodes.json").read_text())
+    episodes = json.loads((directory / f"{split}.episodes.json").read_text(encoding="utf-8"))
     cursor = 0
     for episode in episodes:
         if episode["start"] != cursor or episode["length"] < 1:

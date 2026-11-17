@@ -201,3 +201,146 @@ def test_reach_limit_applies_to_both_proposal_and_candidate_waypoints(config, wo
     # The suggestion is 14 m away but only 0.75 m of this macro remains reachable.
     # Both sides of the comparison must use that distance, not just the candidates.
     assert max(c.learned_utility or 0. for c in late.candidates) > 0.5
+
+
+def actor_file_v2(
+    tmp_path,
+    nav=(0.2, 0.0),
+    posture_logits=(-1.0, 2.5, -1.0),
+    enhanced_logit=2.0,
+    width=20.0,
+    height=12.0,
+    name="actor_v2.json",
+):
+    from sentry_core.navigation_features import (
+        FEATURE_NAMES_V2,
+        FEATURE_VERSION_V2,
+        NavigationSpec,
+    )
+
+    parameters = {"log_std": [-2.0, -2.0]}
+    for layer, input_size, output_size in ((0, 85, 8), (2, 8, 8), (4, 8, 6)):
+        parameters[f"layers.{layer}.weight"] = np.zeros((output_size, input_size)).tolist()
+        parameters[f"layers.{layer}.bias"] = np.zeros(output_size).tolist()
+    parameters["layers.4.bias"] = [
+        *np.arctanh(nav).tolist(),
+        *list(posture_logits),
+        float(enhanced_logit),
+    ]
+    payload = {
+        "artifact_type": "sentry_navigation_policy",
+        "schema_version": 2,
+        "feature_version": FEATURE_VERSION_V2,
+        "feature_names": list(FEATURE_NAMES_V2),
+        "algorithm": "iql",
+        "spec": NavigationSpec(width=width, height=height).to_dict(),
+        "architecture": {"type": "mlp", "hidden": 8, "action_dim": 6},
+        "parameters": parameters,
+        "target_return": 0.0,
+        "return_scale": 1.0,
+        "provenance": {"dataset_id": "test-v2"},
+    }
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_v2_85_dim_features_are_causal_and_mirror_invariant(config, world_factory):
+    from sentry_core.inputs import view_inputs
+    from sentry_core.model import RobotStatus, Team, Vec2
+    from sentry_core.navigation_features import (
+        FEATURE_NAMES_V2,
+        FEATURE_VERSION_V2,
+        NavigationSpec,
+        encode_world,
+    )
+
+    spec = NavigationSpec(width=20.0, height=12.0)
+    status = RobotStatus(
+        7, Team.ALLY, 10.0, hp=280.0, max_hp=400.0, alive=True, ammo=0.6, source=1,
+        heat_ratio=0.45, last_hit_stamp=8.5, posture="attack", posture_enhanced=True,
+        posture_ready_at=12.0, posture_time_sec=(20.0, 10.0, 30.0),
+        enhanced_used_sec=(3.0, 0.0, 7.5),
+    )
+    red_world = replace(
+        world_factory(
+            allies=((1, 6.0, 3.0, 1.0, 0.2),),
+            enemies=((11, 15.0, 7.0, -1.0, 0.0),),
+        ),
+        robots={7: status},
+    )
+    red_vec = encode_world(
+        red_world, spec, mirror=False, inputs=view_inputs(red_world, config),
+        feature_version=FEATURE_VERSION_V2,
+    )
+    assert red_vec.shape == (85,) and len(FEATURE_NAMES_V2) == 85
+    assert red_vec[FEATURE_NAMES_V2.index("ego.heat_ratio")] == pytest.approx(0.45)
+    assert red_vec[FEATURE_NAMES_V2.index("ego.hit_recency")] == pytest.approx(1.0 - 1.5 / 5.0)
+    assert red_vec[FEATURE_NAMES_V2.index("ego.posture.attack")] == 1.0
+    assert red_vec[FEATURE_NAMES_V2.index("ego.posture.cooldown_norm")] == pytest.approx(
+        2.0 / 5.0
+    )
+    assert red_vec[FEATURE_NAMES_V2.index("ego.enhanced_left.attack")] == pytest.approx(
+        12.0 / 15.0
+    )
+
+    def flip(track):
+        return replace(
+            track,
+            position=Vec2(20.0 - track.position.x, 12.0 - track.position.y),
+            velocity=Vec2(-track.velocity.x, -track.velocity.y),
+        )
+
+    blue_cfg = replace(config, own_team="BLUE", self_id=107, mirrored=True)
+    blue_world = replace(
+        red_world,
+        self_track=replace(flip(red_world.self_track), robot_id=107),
+        allies=tuple(flip(t) for t in red_world.allies),
+        enemies=tuple(flip(t) for t in red_world.enemies),
+        robots={107: replace(status, robot_id=107)},
+    )
+    blue_vec = encode_world(
+        blue_world, spec, mirror=True, inputs=view_inputs(blue_world, blue_cfg),
+        feature_version=FEATURE_VERSION_V2,
+    )
+    np.testing.assert_allclose(red_vec, blue_vec, atol=1e-6)
+
+
+def test_v2_actor_steers_posture_when_blended_but_never_in_shadow_mode(
+    config, world_factory, tmp_path
+):
+    from sentry_core.model import RobotStatus, Team
+    from sentry_core.policy import DecisionEngine
+    from sentry_core.rl_policy import GoalPrior
+
+    # Strong RL preference for "defense" + enhanced during close combat, while blend=0 SHADOW
+    # must produce the exact same task and posture as the pure rule engine!
+    path = actor_file_v2(
+        tmp_path, nav=(0.05, 0.0), posture_logits=(-3.0, 4.0, -3.0), enhanced_logit=3.0
+    )
+    status = RobotStatus(
+        7, Team.ALLY, 10.0, hp=360.0, max_hp=400.0, alive=True, ammo=0.8, source=1
+    )
+    world = replace(
+        world_factory(
+            now=10.0,
+            self_position=(4.0, 5.0),
+            allies=((1, 6.0, 4.0, 0.5, 0.0),),
+            enemies=((11, 7.5, 5.5, -0.3, 0.0),),
+        ),
+        robots={7: status},
+    )
+    rule_dec = DecisionEngine(config, session_id="s").step(world)
+    shadow_dec = DecisionEngine(
+        config, session_id="s", goal_prior=GoalPrior.load(path, config, blend=0.0)
+    ).step(world)
+    assert shadow_dec.task == rule_dec.task
+    assert shadow_dec.policy_info["status"] == "SHADOW"
+    assert shadow_dec.policy_info["posture_probs"]["defense"] > 0.95
+
+    blended_dec = DecisionEngine(
+        config, session_id="s", goal_prior=GoalPrior.load(path, config, blend=0.85)
+    ).step(world)
+    assert blended_dec.task.posture == "defense"
+    assert blended_dec.task.posture_enhanced is True
+

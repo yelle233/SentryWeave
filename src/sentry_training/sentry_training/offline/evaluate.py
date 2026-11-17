@@ -19,14 +19,25 @@ def load_actor(path, device="cpu"):
     portable = NumpyNavigationPolicy.load(path)
     architecture = portable.architecture
     if architecture["type"] == "mlp":
-        actor = GaussianActor(73, architecture["hidden"])
+        actor = GaussianActor(
+            portable.obs_dim, architecture["hidden"], action_dim=portable.action_dim
+        )
     else:
         actor = DecisionTransformer(
-            73, architecture["width"], architecture["heads"], architecture["layers"],
-            architecture["context"], dropout=0., max_timestep=architecture["max_timestep"],
+            portable.obs_dim,
+            architecture["width"],
+            architecture["heads"],
+            architecture["layers"],
+            architecture["context"],
+            dropout=0.0,
+            max_timestep=architecture["max_timestep"],
+            action_dim=portable.action_dim,
         )
-    actor.load_state_dict({name: torch.as_tensor(value, dtype=torch.float32)
-                           for name, value in portable.parameters.items()}, strict=True)
+    actor.load_state_dict(
+        {name: torch.as_tensor(value, dtype=torch.float32)
+         for name, value in portable.parameters.items()},
+        strict=True,
+    )
     return actor.to(device).eval().requires_grad_(False), portable
 
 
@@ -71,8 +82,10 @@ def evaluate_actor(dataset, actor_path, device="auto", split="test", output=None
     prediction, nll = predict_torch(actor, tensors, ids, portable.architecture.get("context", 1),
                                      portable.return_scale, portable.target_return)
     elapsed = time.perf_counter() - started
+    pred_xy = prediction[:, :2]
+    act_xy = data["actions"][:, :2]
     extent = np.array([portable.spec.width, portable.spec.height])
-    errors = np.linalg.norm((prediction - data["actions"]) * extent, axis=1)
+    errors = np.linalg.norm((pred_xy - act_xy) * extent, axis=1)
     velocity_baseline = constant_velocity_actions(data["obs"], portable.spec)
     groups = _group_labels(data)
     report = {
@@ -90,17 +103,19 @@ def evaluate_actor(dataset, actor_path, device="auto", split="test", output=None
         selected = data.indices(roles)
         if not len(selected):
             continue
-        metrics = navigation_metrics(prediction[selected], data["actions"][selected],
-                                     data["obs"][selected], *extent, nll[selected])
+        metrics = navigation_metrics(
+            prediction[selected], data["actions"][selected],
+            data["obs"][selected], *extent, nll[selected],
+        )
         metrics["match_groups"] = len(np.unique(groups[selected]))
         metrics["endpoint_cluster_ci95_m"] = clustered_interval(errors[selected], groups[selected])
         metrics["cross_role"] = not set(roles) <= training_roles
         metrics["zero_displacement_baseline"] = navigation_metrics(
-            np.zeros_like(prediction[selected]), data["actions"][selected], data["obs"][selected],
-            *extent,
+            np.zeros_like(pred_xy[selected]), act_xy[selected], data["obs"][selected], *extent
         )
         metrics["constant_velocity_baseline"] = navigation_metrics(
-            velocity_baseline[selected], data["actions"][selected], data["obs"][selected], *extent)
+            velocity_baseline[selected], act_xy[selected], data["obs"][selected], *extent
+        )
         report["domains"][name] = metrics
     sample = np.random.default_rng(1729).choice(len(data), min(2048, len(data)), replace=False)
     sample_ids = torch.as_tensor(sample, device=device)
@@ -108,14 +123,19 @@ def evaluate_actor(dataset, actor_path, device="auto", split="test", output=None
     occlusion = {}
     for name, start, end in (("allies_missing", 13, 43), ("enemies_missing", 43, 73)):
         changed = original.clone()
-        changed[:, start:end] = 0.
+        changed[:, start:end] = 0.0
         tensors.values["obs"] = changed
-        masked, _ = predict_torch(actor, tensors, sample_ids, portable.architecture.get("context", 1),
-                                  portable.return_scale, portable.target_return)
-        masked_error = np.linalg.norm((masked - data["actions"][sample]) * extent, axis=1)
+        masked, _ = predict_torch(
+            actor, tensors, sample_ids, portable.architecture.get("context", 1),
+            portable.return_scale, portable.target_return,
+        )
+        masked_xy = masked[:, :2]
+        masked_error = np.linalg.norm((masked_xy - act_xy[sample]) * extent, axis=1)
         occlusion[name] = {
             "samples": len(sample),
-            "mean_proposal_change_m": float(np.linalg.norm((masked - prediction[sample]) * extent, axis=1).mean()),
+            "mean_proposal_change_m": float(
+                np.linalg.norm((masked_xy - pred_xy[sample]) * extent, axis=1).mean()
+            ),
             "endpoint_error_change_m": float((masked_error - errors[sample]).mean()),
         }
     tensors.values["obs"] = original
@@ -156,12 +176,24 @@ def compare(dataset, actors, output, device="auto"):
                     if r["algorithm"] == algorithm and domain in r["domains"]]
             if not rows:
                 continue
+            metric_names = [
+                "endpoint_error_m",
+                "moving_endpoint_error_m",
+                "stationary_endpoint_error_m",
+                "balanced_endpoint_error_m",
+                "outside_field_fraction",
+            ]
+            for extra in ("posture_accuracy", "enhanced_accuracy"):
+                if all(extra in r for r in rows):
+                    metric_names.append(extra)
             aggregate[algorithm][domain] = {
-                metric: {"mean": float(np.mean([r[metric] for r in rows])),
-                         "seed_std": float(np.std([r[metric] for r in rows], ddof=1)) if len(rows) > 1 else 0.}
-                for metric in ("endpoint_error_m", "moving_endpoint_error_m",
-                               "stationary_endpoint_error_m", "balanced_endpoint_error_m",
-                               "outside_field_fraction")
+                metric: {
+                    "mean": float(np.mean([r[metric] for r in rows])),
+                    "seed_std": (
+                        float(np.std([r[metric] for r in rows], ddof=1)) if len(rows) > 1 else 0.0
+                    ),
+                }
+                for metric in metric_names
             }
             aggregate[algorithm][domain]["seeds"] = len(rows)
     for (algorithm, seed), error in errors.items():
@@ -207,11 +239,13 @@ def fit_fqe(replay, actor, device="cpu", steps=8000, hidden=128, lr=3e-4,
         raise ValueError("no FQE training samples")
     arrays = {name: torch.as_tensor(replay[name][selected], device=device)
               for name in ("obs", "actions", "next_obs", "rewards", "discounts")}
-    critic = Critic(arrays["obs"].shape[1], hidden).to(device)
+    critic = Critic(arrays["obs"].shape[1], hidden, action_dim=arrays["actions"].shape[1]).to(
+        device
+    )
     target = copy.deepcopy(critic).requires_grad_(False)
     optimizer = torch.optim.Adam(critic.parameters(), lr=lr)
     with torch.no_grad():
-        next_actions = actor.action(arrays["next_obs"])
+        next_actions = actor.critic_action(arrays["next_obs"])
     started = time.perf_counter()
     for _ in range(steps):
         ids = torch.randint(len(selected), (batch_size,), device=device)
@@ -249,9 +283,11 @@ def evaluate_fqe(dataset, actor_path, steps=8000, seeds=(17, 23), device="auto",
     start_obs = torch.as_tensor(test["obs"][starts], device=device)
     runs = []
     for seed in seeds:
-        critic, report = fit_fqe(training, actor, device=device, steps=steps, seed=seed, roles=roles)
+        critic, report = fit_fqe(
+            training, actor, device=device, steps=steps, seed=seed, roles=roles
+        )
         with torch.no_grad():
-            value = critic(start_obs, actor.action(start_obs)).cpu().numpy()
+            value = critic(start_obs, actor.critic_action(start_obs)).cpu().numpy()
         report.update(estimated_fragment_start_value=float(value.mean()),
                       std_across_fragments=float(value.std()))
         runs.append(report)

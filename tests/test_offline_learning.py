@@ -195,3 +195,186 @@ def test_velocity_baseline_uses_only_observable_horizon_information():
     obs[0, 7], obs[0, 8] = 2 / 420, 1.
     prediction = constant_velocity_actions(obs, NavigationSpec())
     np.testing.assert_allclose(prediction[:, 0], [1.2 / 28, 3. / 28], rtol=1e-6)
+
+
+@pytest.mark.parametrize("algorithm", ["bc", "dt"])
+def test_v2_joint_numpy_export_matches_torch_across_all_6_outputs(tmp_path, algorithm):
+    import torch
+    from sentry_core.navigation_features import NavigationSpec
+    from sentry_core.rl_policy import NumpyNavigationPolicy
+    from sentry_training.offline.export import export_actor
+    from sentry_training.offline.networks import DecisionTransformer, GaussianActor
+
+    torch.manual_seed(11)
+    if algorithm == "bc":
+        network = GaussianActor(85, hidden=32, action_dim=6).eval()
+    else:
+        network = DecisionTransformer(
+            85, width=32, heads=2, layers=2, context=4, dropout=0.0, action_dim=6
+        ).eval()
+    path = tmp_path / f"actor_v2_{algorithm}.json"
+    export_actor(
+        network, path, algorithm, NavigationSpec(), {"dataset_id": "v2-unit"}, target_return=1.5
+    )
+    portable = NumpyNavigationPolicy.load(path)
+    assert portable.schema_version == 2 and portable.action_dim == 6
+    obs = np.random.default_rng(13).uniform(-1, 1, (3, 85)).astype(np.float32)
+    actions = np.zeros((3, 6), dtype=np.float32)
+    actions[:, 4] = 1.0  # past "move" one-hot
+    rtg = np.full((3, 1), 1.5, dtype=np.float32)
+    times = np.array([0, 5, 10], dtype=np.int64)
+    with torch.no_grad():
+        if algorithm == "bc":
+            expected = network.action(torch.from_numpy(obs[-1:])).numpy()[0]
+        else:
+            expected = network.action(
+                torch.from_numpy(obs[None]),
+                torch.from_numpy(actions[None]),
+                torch.from_numpy(rtg[None]),
+                torch.from_numpy(times[None]),
+                torch.ones(1, 3, dtype=torch.bool),
+            ).numpy()[0, -1]
+    actual = portable.predict(obs, actions, rtg, times)
+    assert actual.shape == (6,) and np.all(np.abs(actual[:2]) <= 1.0)
+    np.testing.assert_allclose(actual, expected, atol=3e-5, rtol=3e-5)
+
+
+def test_v2_iql_learns_high_reward_posture_and_navigation_jointly():
+    import torch
+    from sentry_training.offline.networks import GaussianActor, IQLAgent
+
+    torch.set_num_threads(1)
+    torch.manual_seed(21)
+    obs = torch.zeros(120, 85)
+    # Low-reward majority: move (-0.5, 0) + posture "move" [0, 0, 1] + enhanced=0
+    actions = torch.zeros(120, 6)
+    actions[:85, 0] = -0.5
+    actions[:85, 4] = 1.0
+    # High-reward minority: move (+0.5, 0) + posture "attack" [1, 0, 0] + enhanced=1
+    actions[85:, 0] = 0.5
+    actions[85:, 2] = 1.0
+    actions[85:, 5] = 1.0
+    rewards = torch.zeros(120)
+    rewards[85:] = 3.0
+    batch = {
+        "obs": obs, "actions": actions, "next_obs": obs,
+        "rewards": rewards, "discounts": torch.zeros(120),
+    }
+    bc = GaussianActor(85, hidden=32, action_dim=6)
+    opt_bc = torch.optim.Adam(bc.parameters(), lr=3e-3)
+    for _ in range(180):
+        loss = -bc.log_prob(obs, actions).mean()
+        opt_bc.zero_grad()
+        loss.backward()
+        opt_bc.step()
+
+    agent = IQLAgent(85, hidden=32, beta=3.5, reward_scale=1.0, action_dim=6)
+    agent.actor.load_state_dict(bc.state_dict())
+    opt_iql = torch.optim.Adam([p for p in agent.parameters() if p.requires_grad], lr=3e-3)
+    for _ in range(500):
+        losses, _ = agent.losses(batch)
+        opt_iql.zero_grad()
+        sum(losses.values()).backward()
+        torch.nn.utils.clip_grad_norm_(agent.parameters(), 5.0)
+        opt_iql.step()
+        agent.update_target()
+
+    with torch.no_grad():
+        pred = agent.actor.action(obs[:1])[0]
+    assert pred[0].item() > 0.25
+    assert int(pred[2:5].argmax().item()) == 0  # "attack" wins over majority "move"
+    assert pred[5].item() > 0.0  # enhanced logit > 0 (prob > 0.5)
+
+
+def test_v2_dataset_train_warm_start_evaluate_and_fqe_end_to_end(tmp_path):
+    from sentry_core.navigation_features import (
+        FEATURE_NAMES_V2,
+        FEATURE_VERSION_V2,
+        NavigationSpec,
+    )
+    from sentry_training.offline.data import SPLITS, file_hash, read_split
+    from sentry_training.offline.evaluate import evaluate_actor, evaluate_fqe
+    from sentry_training.offline.train import TrainingOptions, train
+
+    dataset = tmp_path / "dataset_v2"
+    dataset.mkdir()
+    rng = np.random.default_rng(31)
+    spec = NavigationSpec()
+    meta = {
+        "schema_version": 2,
+        "feature_version": FEATURE_VERSION_V2,
+        "feature_names": list(FEATURE_NAMES_V2),
+        "spec": spec.to_dict(),
+        "source": {"filename": "arena2027.jsonl", "sha256": "0" * 64},
+        "splits": {},
+        "dataset_id": "v2-e2e-dataset",
+    }
+    for split in SPLITS:
+        n = 16
+        obs = rng.uniform(0.0, 1.0, (n, 85)).astype(np.float32)
+        next_obs = obs.copy()
+        actions = np.zeros((n, 6), dtype=np.float32)
+        actions[:, :2] = rng.uniform(-0.2, 0.2, (n, 2)).astype(np.float32)
+        actions[:8, 3] = 1.0
+        actions[8:, 2] = 1.0
+        actions[8:, 5] = 1.0
+        terminated = np.zeros(n, dtype=np.float32)
+        terminated[[7, 15]] = 1.0
+        discounts = np.where(terminated > 0.5, 0.0, 0.95).astype(np.float32)
+        arrays = {
+            "obs": obs,
+            "next_obs": next_obs,
+            "actions": actions,
+            "rewards": rng.normal(0.5, 0.2, n).astype(np.float32),
+            "discounts": discounts,
+            "terminated": terminated,
+            "truncated": np.zeros(n, dtype=np.float32),
+            "durations": np.full(n, 5.0, dtype=np.float32),
+            "times": np.tile(np.arange(0, 40, 5, dtype=np.float32), 2),
+            "episode_ids": np.repeat([0, 1], 8).astype(np.int64),
+            "roles": np.full(n, 7, dtype=np.int64),
+        }
+        npz_path = dataset / f"{split}.npz"
+        np.savez_compressed(npz_path, **arrays)
+        episodes = [
+            {"episode_id": 0, "start": 0, "length": 8, "group": f"{split}/0", "role": 7},
+            {"episode_id": 1, "start": 8, "length": 8, "group": f"{split}/1", "role": 7},
+        ]
+        (dataset / f"{split}.episodes.json").write_text(json.dumps(episodes), encoding="utf-8")
+        meta["splits"][split] = {
+            "transitions": n,
+            "episodes": 2,
+            "sha256": file_hash(npz_path),
+            "roles": {"7": n},
+        }
+    (dataset / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    loaded = read_split(dataset, "train")
+    assert loaded["obs"].shape == (16, 85) and loaded["actions"].shape == (16, 6)
+
+    bc_dir = tmp_path / "bc_v2"
+    bc_opts = TrainingOptions(
+        algorithm="bc", steps=10, batch_size=8, eval_every=5, hidden=16, roles=(7,), device="cpu"
+    )
+    bc_report = train(dataset, bc_dir, bc_opts)
+    assert "posture_accuracy" in bc_report["validation"]
+    assert "enhanced_accuracy" in bc_report["validation"]
+
+    iql_dir = tmp_path / "iql_v2"
+    iql_opts = TrainingOptions(
+        algorithm="iql", steps=10, batch_size=8, eval_every=5, hidden=16, roles=(7,), device="cpu"
+    )
+    iql_report = train(dataset, iql_dir, iql_opts, initial_actor=bc_dir / "actor.json")
+    assert iql_report["validation"]["posture_accuracy"] >= 0.0
+
+    eval_report = evaluate_actor(dataset, iql_dir / "actor.json", device="cpu")
+    assert "posture_accuracy" in eval_report["domains"]["sentry_transfer"]
+    assert "allies_missing" in eval_report["feature_occlusion"]
+
+    fqe_report = evaluate_fqe(
+        dataset, iql_dir / "actor.json", steps=20, seeds=(7,), device="cpu"
+    )
+    assert fqe_report["fragments"] == 2
+    assert np.isfinite(fqe_report["runs"][0]["estimated_fragment_start_value"])
+
+

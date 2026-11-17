@@ -92,7 +92,10 @@ def augment_observations(obs, probability):
         return obs
     result = obs.clone()
     batch = len(result)
-    for start, length in ((5, 2), (7, 2), (9, 2), (11, 2)):
+    channels = [(5, 2), (7, 2), (9, 2), (11, 2)]
+    if obs.shape[-1] == 85:
+        channels.extend(((73, 2), (75, 2), (78, 7)))
+    for start, length in channels:
         dropped = torch.rand(batch, device=obs.device) < probability
         result[dropped, ..., start:start + length] = 0
     for start in (13, 43):
@@ -127,14 +130,15 @@ def predict_torch(actor, tensors, indices, context, return_scale, target_return,
 
 
 def navigation_metrics(predicted, target, obs, width, height, nll=None):
-    delta = (predicted - target) * np.array([width, height])
+    pred_xy, tgt_xy = predicted[:, :2], target[:, :2]
+    delta = (pred_xy - tgt_xy) * np.array([width, height])
     distance = np.linalg.norm(delta, axis=1)
-    magnitude = np.linalg.norm(target * np.array([width, height]), axis=1)
+    magnitude = np.linalg.norm(tgt_xy * np.array([width, height]), axis=1)
     moving = magnitude > 0.5
     moving_error = float(distance[moving].mean()) if moving.any() else float(distance.mean())
     stationary_error = float(distance[~moving].mean()) if (~moving).any() else moving_error
-    proposed = obs[:, :2] + predicted
-    return {
+    proposed = obs[:, :2] + pred_xy
+    metrics = {
         "samples": len(distance), "endpoint_error_m": float(distance.mean()),
         "endpoint_p90_m": float(np.percentile(distance, 90)),
         "moving_endpoint_error_m": moving_error,
@@ -144,14 +148,30 @@ def navigation_metrics(predicted, target, obs, width, height, nll=None):
         "outside_field_fraction": float(((proposed < 0) | (proposed > 1)).any(axis=1).mean()),
         "nll": float(nll.mean()) if nll is not None else None,
     }
+    if predicted.shape[1] == 6 and target.shape[1] == 6:
+        metrics["posture_accuracy"] = float(
+            (predicted[:, 2:5].argmax(axis=1) == target[:, 2:5].argmax(axis=1)).mean()
+        )
+        metrics["enhanced_accuracy"] = float(
+            ((predicted[:, 5] > 0.0) == (target[:, 5] >= 0.5)).mean()
+        )
+    return metrics
 
 
 def _warm_start(actor, path):
-    payload = json.loads(Path(path).read_text())
-    if payload["architecture"] != {"type": "mlp", "hidden": actor.hidden}:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    arch = payload["architecture"]
+    if (
+        arch.get("type") != "mlp"
+        or arch.get("hidden") != actor.hidden
+        or arch.get("action_dim", 2) != actor.action_dim
+    ):
         raise ValueError("BC warm start architecture does not match IQL")
-    actor.load_state_dict({key: torch.as_tensor(value, dtype=torch.float32)
-                           for key, value in payload["parameters"].items()}, strict=True)
+    actor.load_state_dict(
+        {key: torch.as_tensor(value, dtype=torch.float32)
+         for key, value in payload["parameters"].items()},
+        strict=True,
+    )
 
 
 def train(dataset, output, options=TrainingOptions(), initial_actor=None, progress=None):
@@ -182,18 +202,22 @@ def train(dataset, output, options=TrainingOptions(), initial_actor=None, progre
     target_return = float(np.quantile(all_returns, options.target_quantile))
     return_scale = max(1., float(all_returns.std()))
     reward_scale = 1 / max(0.1, float(training["rewards"][selected].std()))
+    obs_dim = training["obs"].shape[1]
+    action_dim = training["actions"].shape[1]
     if options.algorithm == "iql":
-        network = IQLAgent(len(training.metadata["feature_names"]), options.hidden,
-                           expectile=options.expectile, beta=options.beta, reward_scale=reward_scale)
+        network = IQLAgent(
+            obs_dim, options.hidden, expectile=options.expectile, beta=options.beta,
+            reward_scale=reward_scale, action_dim=action_dim,
+        )
         actor = network.actor
         if initial_actor:
             _warm_start(actor, initial_actor)
     elif options.algorithm == "bc":
-        network = actor = GaussianActor(len(training.metadata["feature_names"]), options.hidden)
+        network = actor = GaussianActor(obs_dim, options.hidden, action_dim=action_dim)
     else:
         network = actor = DecisionTransformer(
-            len(training.metadata["feature_names"]), options.dt_width, options.dt_heads,
-            options.dt_layers, options.context,
+            obs_dim, options.dt_width, options.dt_heads,
+            options.dt_layers, options.context, action_dim=action_dim,
         )
     network.to(device)
     optimizer = torch.optim.AdamW(

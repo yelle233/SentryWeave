@@ -423,12 +423,21 @@ class DecisionEngine:
         if subgoal is not None:
             # Only the goal moves: kind, zone, target and goal id stay the rules' choice.
             chosen = replace(chosen, goal=subgoal)
+        effective_blend = (
+            self.goal_prior.info.get("effective_blend", 0.0) if self.goal_prior else 0.0
+        )
+        rl_pref = (
+            self.goal_prior.active_posture_preference(effective_blend)
+            if self.goal_prior
+            else None
+        )
         unsafe = self._unsafe(world)
         spin = self.spin_policy.decide(
             world, view, chosen.kind, chosen.goal, chosen.urgent, unsafe
         )
         posture = self.posture_policy.decide(
-            world, view, chosen.kind, chosen.goal, chosen.urgent, threats, unsafe
+            world, view, chosen.kind, chosen.goal, chosen.urgent, threats, unsafe,
+            rl_preference=rl_pref, effective_blend=effective_blend,
         )
         moved = (self.current is not None and self.current.key == chosen.key
                  and chosen.goal is not None and self.current.goal is not None

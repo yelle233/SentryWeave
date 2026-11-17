@@ -215,9 +215,9 @@ class PosturePolicy:
             and max(0.0, hit_age) <= self.config.posture_hit_window_sec
         )
         hp = view.self_hp
-        heat = view.self_heat_ratio if view.self_heat_ratio is not None else 0.0
+        heat = view.self_heat_ratio
         ammo = view.self_ammo
-        can_shoot = ammo is None or ammo > 0.05
+        can_shoot = ammo is not None and ammo > 0.05
         enemy_dist = _nearest_usable_enemy_distance(world)
         in_combat = enemy_dist <= self.config.posture_attack_range
         own_pos = world.self_track.position if world.self_track else None
@@ -241,7 +241,7 @@ class PosturePolicy:
         rule_enh = {"attack": False, "defense": False, "move": False}
         reason = "RESERVE_BUDGET_MOVE"
 
-        if heat >= 0.75:
+        if heat is not None and heat >= 0.75:
             scores["attack"] = 0.88
             rule_enh["attack"] = in_combat and can_shoot and heat >= 0.80
             reason = "THERMAL_RELIEF_ATTACK"
@@ -261,7 +261,9 @@ class PosturePolicy:
             else:
                 scores["attack"] = 0.84
                 scores["defense"] = 0.38
-                rule_enh["attack"] = task_urgent and enemy_dist <= 6.0 and heat >= 0.55
+                rule_enh["attack"] = (
+                    task_urgent and enemy_dist <= 6.0 and heat is not None and heat >= 0.55
+                )
                 reason = "COMBAT_ATTACK"
         elif recently_hit or (max_threat >= 0.35 and not self._is_decayed("defense")):
             scores["defense"] = 0.78

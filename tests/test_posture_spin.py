@@ -390,3 +390,55 @@ def test_serde_round_trips_2027_game_and_robot_posture_tuples(config):
     )
     restored = world_from_dict(json.loads(json_line(world_to_dict(world))))
     assert restored == world
+
+
+def test_posture_unknown_ammo_or_heat_never_treated_as_full_or_zero(config):
+    from sentry_core.inputs import view_inputs
+    from sentry_core.model import RobotStatus, TaskType, Team, Vec2
+    from sentry_core.policy import DecisionEngine
+    from sentry_core.posture_spin import PosturePolicy
+
+    # Unknown ammo (None) must NOT be treated as can_shoot=True (+25% vulnerable "attack");
+    # instead it stays in safe "defense"/"move", while known ammo=0.8 enters "attack".
+    unknown_ammo_status = RobotStatus(
+        7, Team.ALLY, 10.0, hp=380.0, max_hp=400.0, alive=True, ammo=None, heat_ratio=None,
+        source=1,
+    )
+    _, unknown_world = make_running_world(
+        config,
+        now=10.0,
+        self_pos=(4.0, 5.0),
+        enemies=((103, 7.5, 5.5, -0.3, 0.0),),
+        self_status=unknown_ammo_status,
+    )
+    dec_unknown = DecisionEngine(config, session_id="unk-ammo").step(unknown_world)
+    assert dec_unknown.task.posture in ("defense", "move")
+    assert dec_unknown.task.posture != "attack"
+
+    known_ammo_status = replace(unknown_ammo_status, ammo=0.8)
+    _, known_world = make_running_world(
+        config,
+        now=10.0,
+        self_pos=(4.0, 5.0),
+        enemies=((103, 7.5, 5.5, -0.3, 0.0),),
+        self_status=known_ammo_status,
+    )
+    dec_known = DecisionEngine(config, session_id="known-ammo").step(known_world)
+    assert dec_known.task.posture == "attack"
+    assert dec_known.task.posture_enhanced is False
+
+    # Unknown heat_ratio (None) during urgent close-range intercept must gate thermal branches
+    # cleanly without coercing None -> 0.0 or triggering thermal enhanced.
+    policy = PosturePolicy(config)
+    urgent_unknown_heat = policy.decide(
+        known_world,
+        view_inputs(known_world, config),
+        TaskType.INTERCEPT,
+        Vec2(6.0, 5.0),
+        task_urgent=True,
+        threats=(),
+        unsafe=None,
+    )
+    assert urgent_unknown_heat.posture == "attack"
+    assert urgent_unknown_heat.enhanced is False
+
