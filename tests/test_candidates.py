@@ -309,3 +309,83 @@ def test_contest_samples_must_be_an_integer(config):
         with pytest.raises(ValueError, match="contest_samples must be an integer"):
             validate_config(replace(config, contest_samples=value))
     assert validate_config(replace(config, contest_samples=16)).contest_samples == 16
+
+
+def test_goal_scope_validation_and_yaml_loading(config, tmp_path):
+    import yaml
+    from conftest import ROOT
+    from sentry_core.config import GOAL_SCOPES, load_config, validate_config
+
+    assert GOAL_SCOPES == ("full", "own_half_and_highland", "own_half")
+    assert config.goal_scope == "full"
+    for scope in GOAL_SCOPES:
+        assert validate_config(replace(config, goal_scope=scope)).goal_scope == scope
+    for bad in ("", "enemy_half", None, True, 1):
+        with pytest.raises(ValueError, match="goal_scope"):
+            validate_config(replace(config, goal_scope=bad))
+
+    base_yaml = ROOT / "src/sentry_bringup/config/tactics.yaml"
+    raw = yaml.safe_load(base_yaml.read_text(encoding="utf-8"))
+    raw["field"] = str(base_yaml.parent / raw["field"])
+
+    top_path = tmp_path / "top_scope.yaml"
+    top_path.write_text(yaml.safe_dump({**raw, "goal_scope": "own_half_and_highland"}))
+    assert load_config(top_path).goal_scope == "own_half_and_highland"
+    assert load_config(top_path, goal_scope="own_half").goal_scope == "own_half"
+
+    param_path = tmp_path / "param_scope.yaml"
+    param_path.write_text(yaml.safe_dump({
+        **raw, "parameters": {**raw["parameters"], "goal_scope": "own_half"},
+    }))
+    assert load_config(param_path).goal_scope == "own_half"
+    assert load_config(param_path, goal_scope="full").goal_scope == "full"
+
+
+def test_goal_scope_projects_boundary_zone_and_blocks_rl_subgoal(config, world_factory, tmp_path):
+    from sentry_core.candidates import GoalGenerator
+    from sentry_core.config import goal_in_scope, zone_in_scope
+    from sentry_core.geometry import TacticalMap
+    from sentry_core.model import TaskType, Vec2
+    from sentry_core.policy import DecisionEngine
+    from sentry_core.rl_policy import GoalPrior
+    from test_rl_policy import actor_file
+
+    # Demo bounds [0, 0, 20, 12], mid_x = 10.0, own_base at (2, 6), center zone at (10, 2) r=2.5.
+    # Also works on schema-1-like configs without structures (falls back to DEFEND_BASE zone).
+    scoped = replace(config, structures=(),
+                     zones=tuple(replace(z, structure="") for z in config.zones),
+                     goal_scope="own_half")
+    arena = TacticalMap(scoped)
+    world = world_factory(self_position=(8.5, 2.0), allies=((1, 14.0, 4.0, 1.4, 0.4),))
+    engine = DecisionEngine(scoped, session_id="scope-demo")
+    intents, threats = engine.estimator.estimate(world), engine._threats(world)
+    generated = GoalGenerator(scoped, arena).generate(world, intents, threats)
+    # Dynamic goals skip enemy_outpost (x=18 > 10) and project center's east sample (11.25, 2.0)
+    # back into own_half (x <= 10.0).
+    dynamic = [g for g in generated if g.source != "preferred"]
+    assert dynamic and all(g.zone_id != "enemy_outpost" for g in dynamic)
+    assert any(g.zone_id == "center" for g in dynamic)
+    assert all(goal_in_scope(scoped, g.position) for g in dynamic)
+
+    decision = engine.step(world)
+    assert decision.policy_info["goal_scope"] == "own_half"
+    assert "support_north:OUTSIDE_GOAL_SCOPE" in decision.rejected
+    assert "support_south:OUTSIDE_GOAL_SCOPE" in decision.rejected
+    assert all(
+        goal_in_scope(scoped, c.goal)
+        and zone_in_scope(scoped, next(z for z in scoped.zones if z.name == c.zone_id))
+        for c in decision.candidates if c.goal is not None
+    )
+
+    # Ally contesting center (10, 2); sentry at (9.2, 2.0); RL proposes +1.6 m -> (10.8, 2.0),
+    # which is within goal_update_distance (0.8 m <= 1.5 m) of contest_south (10, 2) yet crosses
+    # mid_x = 10.0. _refine must block it with OUTSIDE_GOAL_SCOPE!
+    contest_world = world_factory(self_position=(9.2, 2.0), allies=((1, 9.5, 2.0, 0.4, 0.0),))
+    prior = GoalPrior.load(actor_file(tmp_path, (0.08, 0.0)), scoped, blend=0.5)
+    rl_dec = DecisionEngine(scoped, session_id="scope-rl", goal_prior=prior).step(contest_world)
+    assert rl_dec.task.kind == TaskType.SUPPORT and rl_dec.task.zone_id == "center"
+    assert Vec2(*rl_dec.policy_info["projected_goal"]).x > 10.0
+    assert rl_dec.policy_info["subgoal_refined"] is False
+    assert rl_dec.policy_info["subgoal_reason"] == "OUTSIDE_GOAL_SCOPE"
+    assert "rl_subgoal:OUTSIDE_GOAL_SCOPE" in rl_dec.rejected
+    assert goal_in_scope(scoped, rl_dec.task.goal)

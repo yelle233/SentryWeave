@@ -24,9 +24,12 @@ def read_config(node):
         default = ""
     path = node.declare_parameter("config_file", default).value
     own_team = node.declare_parameter("own_team", "").value
+    goal_scope = node.declare_parameter("goal_scope", "").value
+    if not isinstance(goal_scope, str):
+        raise ValueError(f"goal_scope must be a string, got {goal_scope!r}")
     if not path:
         raise ValueError("config_file is required")
-    return load_config(path, own_team or None)
+    return load_config(path, own_team or None, goal_scope=goal_scope or None)
 
 
 def seconds(node):

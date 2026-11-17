@@ -15,7 +15,7 @@ from sentry_interfaces.msg import (
 from sentry_core.inputs import view_inputs
 from sentry_core.learned import load_decision_models
 from sentry_core.model import IntentType, Phase
-from sentry_core.policy import DecisionEngine
+from sentry_core.policy import DecisionEngine, defense_structure_destroyed
 from sentry_core.rl_policy import GoalPrior, mirror_setting
 from sentry_core.serde import json_line, world_to_dict
 from .codec import (
@@ -81,8 +81,10 @@ class DecisionNode(Node):
             self.get_logger().warning(str(error), throttle_duration_sec=2.)
             return
         self.world = world
-        bases = [z for z in self.config.zones if z.intent == IntentType.DEFEND_BASE]
         info = view_inputs(world, self.config)
+        bases = [z for z in self.config.zones
+                 if z.intent == IntentType.DEFEND_BASE
+                 and not defense_structure_destroyed(z, info.structures)]
         critical = (world.self_track is None or info.phase != Phase.RUNNING
                     or info.self_hp is not None and info.self_hp < self.config.critical_hp
                     or any(t.usable and z.contains(t.position)

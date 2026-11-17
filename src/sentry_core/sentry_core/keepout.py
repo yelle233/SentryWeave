@@ -12,6 +12,7 @@ import numpy as np
 import yaml
 
 from .config import Config
+from .geometry import scope_mask
 from .shapes import area_polygon, inflate
 
 
@@ -53,13 +54,15 @@ def render_keepout(config: Config, map_yaml, output_directory) -> Path:
     # Cover intersecting raster cells; robot footprint inflation is performed by
     # Nav2's inflation filter after KeepoutFilter, consistently for both costmaps.
     radius = resolution / math.sqrt(2)
-    a, b, c, d = config.bounds
-    forbidden = ((x <= a + radius) | (x >= c - radius)
-                 | (y <= b + radius) | (y >= d - radius))
+    x0, y0, x1, y1 = config.bounds
+    forbidden = ((x <= x0 + radius) | (x >= x1 - radius)
+                 | (y <= y0 + radius) | (y >= y1 - radius))
+    if config.goal_scope != "full":
+        forbidden |= ~scope_mask(config, x, y)
     for item in (*config.obstacles, *config.keepouts):
         inside = np.ones(x.shape, dtype=bool)
-        for nx, ny, c in inflate(area_polygon(item), radius)[0]:
-            inside &= nx * x + ny * y <= c
+        for nx, ny, offset in inflate(area_polygon(item), radius)[0]:
+            inside &= nx * x + ny * y <= offset
         forbidden |= inside
     pixels = np.where(forbidden, 0, 254).astype(np.uint8)
     directory = Path(output_directory)

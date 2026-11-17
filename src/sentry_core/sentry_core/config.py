@@ -15,6 +15,8 @@ import yaml
 from .model import TEAM_COLORS, IntentType, TaskType, Vec2
 from .shapes import area_polygon, contains, inflate, is_convex
 
+GOAL_SCOPES = ("full", "own_half_and_highland", "own_half")
+
 
 @dataclass(frozen=True)
 class Area:
@@ -118,6 +120,7 @@ class Config:
     unconfirmed_attack_factor: float = 0.7
     enemy_low_hp_bonus: float = 0.15
     stale_enemy_weight: float = 0.5
+    goal_scope: str = "full"
 
     def structure(self, name: str) -> Structure | None:
         return next((s for s in self.structures if s.name == name), None)
@@ -142,6 +145,8 @@ def validate_config(config: Config) -> Config:
         raise ValueError("invalid frame or self_id")
     if config.own_team not in TEAM_COLORS:
         raise ValueError("own_team must be RED or BLUE")
+    if not isinstance(config.goal_scope, str) or config.goal_scope not in GOAL_SCOPES:
+        raise ValueError(f"goal_scope must be one of {GOAL_SCOPES}, got {config.goal_scope!r}")
     for name in ("robot_radius", "observed_age", "predicted_age", "self_timeout",
                  "referee_timeout", "retention", "max_speed", "history_sec", "cooldown",
                  "task_lease", "nominal_speed", "ally_clearance", "game_timeout",
@@ -234,14 +239,64 @@ def sentry_id(team: str, self_id=None) -> int:
     return SENTRY_IDS.get(team, 7) if self_id is None else int(self_id)
 
 
-def _parameters(raw: dict) -> dict:
-    parameters = raw.get("parameters", {}) or {}
-    if not isinstance(parameters, dict):
+def own_half_low(config: Config) -> bool:
+    """Whether this team's own half is ``x <= mid_x`` (True) or ``x >= mid_x`` (False)."""
+    x0, _, x1, _ = config.bounds
+    mid_x = 0.5 * (x0 + x1)
+    base = config.structure("own_base")
+    if base is not None:
+        base_x = base.position.x
+    else:
+        defend = [z for z in config.zones if z.intent == IntentType.DEFEND_BASE]
+        base_x = max(defend, key=lambda z: z.importance).center.x if defend else mid_x
+    return base_x <= mid_x
+
+
+def in_own_half(config: Config, p: Vec2) -> bool:
+    mid_x = 0.5 * (config.bounds[0] + config.bounds[2])
+    return p.x <= mid_x + 1e-6 if own_half_low(config) else p.x >= mid_x - 1e-6
+
+
+def is_highland_zone(zone: Zone) -> bool:
+    return "highland" in zone.name.lower()
+
+
+def in_highland(config: Config, p: Vec2) -> bool:
+    return any(z.contains(p) for z in config.zones if is_highland_zone(z))
+
+
+def goal_in_scope(config: Config, p: Vec2) -> bool:
+    if config.goal_scope == "full":
+        return True
+    if config.goal_scope == "own_half_and_highland":
+        return in_own_half(config, p) or in_highland(config, p)
+    return in_own_half(config, p) and not in_highland(config, p)
+
+
+def zone_in_scope(config: Config, zone: Zone) -> bool:
+    if config.goal_scope == "full":
+        return True
+    if config.goal_scope == "own_half_and_highland":
+        return is_highland_zone(zone) or in_own_half(config, zone.center)
+    return (not is_highland_zone(zone)) and in_own_half(config, zone.center)
+
+
+def _parameters(raw: dict, goal_scope: str | None = None) -> dict:
+    raw_params = raw.get("parameters", {}) or {}
+    if not isinstance(raw_params, dict):
         raise ValueError("parameters must be a mapping")
+    parameters = dict(raw_params)
+    if "goal_scope" in raw:
+        if "goal_scope" in parameters and parameters["goal_scope"] != raw["goal_scope"]:
+            raise ValueError("conflicting goal_scope in tactics root and parameters")
+        parameters["goal_scope"] = raw["goal_scope"]
+    if goal_scope is not None:
+        parameters["goal_scope"] = goal_scope
     return parameters
 
 
-def load_config(path: str | Path, own_team: str | None = None, check: bool = True) -> Config:
+def load_config(path: str | Path, own_team: str | None = None, check: bool = True,
+                goal_scope: str | None = None) -> Config:
     path = Path(path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or raw.get("schema_version") not in (1, 2):
@@ -250,21 +305,23 @@ def load_config(path: str | Path, own_team: str | None = None, check: bool = Tru
     if raw["schema_version"] == 2:
         from .field import field_problems, read_field
 
-        allowed = {"schema_version", "frame", "self_id", "own_team", "field", "robot_radius",
-                   "weights", "parameters"}
+        allowed = {"schema_version", "frame", "self_id", "own_team", "goal_scope", "field",
+                   "robot_radius", "weights", "parameters"}
         if set(raw) - allowed:
             raise ValueError(f"unknown tactics keys: {set(raw) - allowed}")
         config = validate_config(Config(
             frame=raw["frame"], self_id=sentry_id(team, raw.get("self_id")),
             robot_radius=float(raw["robot_radius"]), weights=tuple(raw["weights"]),
-            own_team=team, **read_field(raw["field"], path.parent, team), **_parameters(raw),
+            own_team=team, **read_field(raw["field"], path.parent, team),
+            **_parameters(raw, goal_scope),
         ))
         problems = field_problems(config) if check else []
         if problems:
             raise ValueError("field check failed: " + "; ".join(problems))
         return config
     allowed = {"schema_version", "frame", "self_id", "site", "bounds", "obstacles",
-               "robot_radius", "zones", "points", "weights", "parameters", "own_team"}
+               "robot_radius", "zones", "points", "weights", "parameters", "own_team",
+               "goal_scope"}
     if set(raw) - allowed:
         raise ValueError(f"unknown tactics keys: {set(raw) - allowed}")
     zones = tuple(Zone(z["id"], Vec2(*z["center"]), float(z["radius"]),
@@ -276,5 +333,5 @@ def load_config(path: str | Path, own_team: str | None = None, check: bool = Tru
         site=raw["site"],
         bounds=tuple(raw["bounds"]), obstacles=tuple(tuple(r) for r in raw["obstacles"]),
         robot_radius=float(raw["robot_radius"]), zones=zones, points=points,
-        weights=tuple(raw["weights"]), own_team=team, **_parameters(raw),
+        weights=tuple(raw["weights"]), own_team=team, **_parameters(raw, goal_scope),
     ))

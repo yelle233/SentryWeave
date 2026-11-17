@@ -331,3 +331,65 @@ def test_known_low_enemy_hp_picks_the_target_but_never_lowers_the_zone_threat(ex
     response = engine.step(raid)
     assert response.arbitration == "URGENT_PREEMPT"
     assert response.task.kind == TaskType.INTERCEPT and response.task.target_id == 12
+
+
+def test_destroyed_own_outpost_clears_threat_rejects_defense_and_keeps_own_base_active(expected):
+    from sentry_core.config import Point, Zone
+    from sentry_core.model import IntentType, StructureState, TaskType, Threat, Vec2
+    from sentry_core.policy import DecisionEngine
+
+    outpost_zone = Zone("own_outpost", Vec2(12.0, 10.5), 2.5, IntentType.DEFEND_BASE, 0.85,
+                        structure="own_outpost")
+    outpost_point = Point("outpost_guard", "own_outpost", Vec2(12.0, 9.5), 0.0,
+                          (TaskType.DEFEND, TaskType.INTERCEPT))
+    with_outpost = replace(expected, zones=(*expected.zones, outpost_zone),
+                           points=(*expected.points, outpost_point))
+    # Enemy standing on own_outpost (far from own_base) while an ally pushes enemy_outpost.
+    raider_on_outpost = ((11, 12.5, 10.8, 0.4, 0.1),)
+
+    alive_world = build(with_outpost, enemies=raider_on_outpost)
+    alive_dec = decide(with_outpost, alive_world)
+    outpost_threat = next(t for t in alive_dec.threats if t.zone_id == "own_outpost")
+    assert outpost_threat.score >= with_outpost.urgent_threat and outpost_threat.enemy_id == 11
+    assert alive_dec.task.zone_id == "own_outpost" and alive_dec.task.kind == TaskType.INTERCEPT
+
+    # Unknown (None) structure state is NEVER treated as destroyed.
+    unknown_structures = {k: v for k, v in alive_world.structures.items() if k != "own_outpost"}
+    unknown_world = replace(alive_world, referee=None, structures=unknown_structures)
+    unknown_dec = decide(with_outpost, unknown_world)
+    unknown_threat = next(t for t in unknown_dec.threats if t.zone_id == "own_outpost")
+    assert unknown_threat.score > 0 and unknown_threat.enemy_id == 11
+    assert any(c.zone_id == "own_outpost" for c in unknown_dec.candidates)
+    assert not any(r.startswith("defense:own_outpost:") and r.endswith(":TARGET_DESTROYED")
+                   for r in unknown_dec.rejected)
+
+    # Confirmed destroyed (alive=False): zero threat, DEFEND & INTERCEPT rejected with
+    # TARGET_DESTROYED, own_base stays active (+0.12 value boost), offensive SUPPORT wins.
+    dead_structures = {**alive_world.structures,
+                       "own_outpost": StructureState("own_outpost", NOW, alive=False, source=1)}
+    dead_world = replace(alive_world, structures=dead_structures)
+    dead_dec = decide(with_outpost, dead_world)
+    assert next(t for t in dead_dec.threats if t.zone_id == "own_outpost") == Threat(
+        "own_outpost", 0.0, None, None)
+    assert not any(c.zone_id == "own_outpost" for c in dead_dec.candidates)
+    assert "outpost_guard:TARGET_DESTROYED" in dead_dec.rejected
+    assert any(r.startswith("defense:own_outpost:") and r.endswith(":TARGET_DESTROYED")
+               for r in dead_dec.rejected)
+    base_def = candidate(dead_dec, "defense_south")
+    assert base_def.features[0] == pytest.approx(0.54)
+    assert dead_dec.task.kind == TaskType.SUPPORT and dead_dec.task.zone_id == "enemy_outpost"
+
+    # Holding own_outpost when it falls immediately drops the dead target (bypasses min_hold).
+    engine = DecisionEngine(with_outpost, session_id="test")
+    first = engine.step(alive_world)
+    assert first.task.zone_id == "own_outpost"
+    second = engine.step(replace(dead_world, stamp=NOW + 0.5))
+    assert second.arbitration == "CURRENT_INVALID"
+    assert second.task.zone_id != "own_outpost"
+
+    # own_base itself is never suppressed as TARGET_DESTROYED even if reported false.
+    base_false = replace(alive_world, structures={
+        **alive_world.structures,
+        "own_base": StructureState("own_base", NOW, alive=False, source=1),
+    })
+    assert any(c.zone_id == "own_base" for c in decide(with_outpost, base_false).candidates)

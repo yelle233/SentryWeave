@@ -8,7 +8,7 @@ import uuid
 from .candidates import (
     MIN_INTERCEPT_THREAT, SUBGOAL_ID, TRAVEL_SCALE, Goal, GoalGenerator, utility,
 )
-from .config import Config, validate_config
+from .config import Config, goal_in_scope, validate_config, zone_in_scope
 from .geometry import TacticalMap
 from .inputs import RL_CATEGORIES, assess, view_inputs
 from .intent import IntentEstimator
@@ -43,6 +43,13 @@ def safety_reason(world: World, config: Config, arena: TacticalMap) -> str | Non
 def _down(info, robot_id: int) -> bool:
     status = info.robot(Team.ALLY, robot_id)
     return status is not None and status.known_alive is False
+
+
+def defense_structure_destroyed(zone, structures) -> bool:
+    return (zone.intent == IntentType.DEFEND_BASE
+            and bool(zone.structure)
+            and zone.structure != "own_base"
+            and structures.get(zone.structure) is False)
 
 
 class DecisionEngine:
@@ -99,6 +106,9 @@ class DecisionEngine:
         result = []
         for zone in config.zones:
             if zone.intent != IntentType.DEFEND_BASE:
+                continue
+            if defense_structure_destroyed(zone, view.structures):
+                result.append(Threat(zone.name, 0.0, None, None))
                 continue
             best, best_priority, top = Threat(zone.name, 0.0, None, None), 0.0, 0.0
             for enemy in world.enemies:
@@ -174,7 +184,12 @@ class DecisionEngine:
         context = {"info": info, "intents": intents, "allies": allies, "can_supply": can_supply,
                    "threats": {t.zone_id: t for t in threats},
                    "completeness": report.completeness}
+        zones = {z.name: z for z in config.zones}
         for goal, path_length in zip(goals, lengths):
+            zone = zones[goal.zone_id]
+            if not zone_in_scope(config, zone) or not goal_in_scope(config, goal.position):
+                rejected.append(f"{goal.goal_id}:OUTSIDE_GOAL_SCOPE")
+                continue
             if self._cooldowns.get(goal.goal_id, 0) > world.stamp:
                 rejected.append(f"{goal.goal_id}:FAILURE_COOLDOWN")
                 continue
@@ -209,8 +224,12 @@ class DecisionEngine:
         value, cooperation, urgency, risk = 0., 0., 0., (1 - hp) * 0.3
         kind = goal.kind
         completeness = context["completeness"]
+        if kind in (TaskType.DEFEND, TaskType.INTERCEPT) and defense_structure_destroyed(
+                zone, info.structures):
+            rejected.append(f"{goal.goal_id}:TARGET_DESTROYED")
+            return None
         if kind == TaskType.DEFEND:
-            value = 0.42 + (0.12 if info.structures["own_outpost"] is False else 0.)
+            value = 0.42 + (0.12 if info.structures.get("own_outpost") is False else 0.)
             cooperation = 0.18 / (1 + coverage)
             urgency, reason = 0.15 + 0.8 * threat.score, "AREA_UNCOVERED"
             boost = config.missing_enemy_defense_boost * (1 - completeness["enemies"])
@@ -304,8 +323,11 @@ class DecisionEngine:
         if subgoal is not None:
             zone = next(z for z in self.config.zones if z.name == chosen.zone_id)
             origin = self.arena.origin(world.self_track.position) if world.self_track else None
-            if not (zone.contains(subgoal)
-                    or subgoal.distance(chosen.goal) <= self.config.goal_update_distance):
+            if not goal_in_scope(self.config, subgoal):
+                rejected.append(f"{SUBGOAL_ID}:OUTSIDE_GOAL_SCOPE")
+                subgoal, reason = None, "OUTSIDE_GOAL_SCOPE"
+            elif not (zone.contains(subgoal)
+                      or subgoal.distance(chosen.goal) <= self.config.goal_update_distance):
                 subgoal, reason = None, "OUTSIDE_TASK_AREA"
             elif (origin is None
                   or not math.isfinite(self.arena.distances(origin, [subgoal])[0])):
@@ -420,7 +442,9 @@ class DecisionEngine:
                                    utility=chosen.utility, confidence=chosen.confidence,
                                    urgent=chosen.urgent, reason=chosen.reason)
         policy_info = dict(self.goal_prior.info) if self.goal_prior else {}
+        policy_info["goal_scope"] = self.config.goal_scope
         if self.model_fallbacks:
             policy_info["model_fallbacks"] = copy.deepcopy(self.model_fallbacks)
-        return Decision(self.current, intents, threats, tuple(candidates), tuple(rejected),
-                        arbitration, world.mode, policy_info, missing_info)
+        return Decision(self.current, intents, threats, tuple(candidates),
+                        tuple(dict.fromkeys(rejected)), arbitration, world.mode, policy_info,
+                        missing_info)

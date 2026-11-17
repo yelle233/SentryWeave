@@ -14,6 +14,7 @@ def generate_launch_description():
     ns, sim = LaunchConfiguration("namespace"), LaunchConfiguration("use_sim_time")
     config = LaunchConfiguration("config_file")
     common = {"config_file": config, "own_team": LaunchConfiguration("own_team"),
+              "goal_scope": ParameterValue(LaunchConfiguration("goal_scope"), value_type=str),
               "use_sim_time": ParameterValue(sim, value_type=bool)}
     tf = [("/tf", "tf"), ("/tf_static", "tf_static")]
     return LaunchDescription([
@@ -23,6 +24,9 @@ def generate_launch_description():
                               default_value=str(share / "config/tactics_rmuc2027.yaml")),
         DeclareLaunchArgument("own_team", default_value="",
                               description="RED or BLUE; empty uses own_team from config_file"),
+        DeclareLaunchArgument(
+            "goal_scope", default_value="",
+            description="full, own_half_and_highland or own_half; empty uses config_file"),
         DeclareLaunchArgument("intent_model", default_value=""),
         DeclareLaunchArgument("utility_model", default_value=""),
         DeclareLaunchArgument("rl_model", default_value=""),

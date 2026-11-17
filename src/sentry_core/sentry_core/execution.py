@@ -8,6 +8,7 @@ a terminal result (or a rejected initial goal) does.
 from dataclasses import dataclass
 import math
 
+from .config import goal_in_scope
 from .geometry import TacticalMap
 from .model import Task, TaskType
 
@@ -82,7 +83,9 @@ class Executor:
             return False
         if task.kind == TaskType.HOLD:
             return task.goal is None
-        return task.kind in TaskType and task.goal is not None and self.arena.legal(task.goal)
+        return (task.kind in TaskType and task.goal is not None
+                and self.arena.legal(task.goal)
+                and goal_in_scope(self.arena.config, task.goal))
 
     @staticmethod
     def _same_definition(a: Task, b: Task) -> bool:

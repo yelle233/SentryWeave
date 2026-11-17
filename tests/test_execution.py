@@ -247,3 +247,18 @@ def test_executor_can_skip_path_precheck_while_keeping_goal_legality(config):
     illegal_machine.submit(bad, 10.0, 100.0)
     commands = illegal_machine.drain()
     assert [(c.kind, c.state) for c in commands] == [("FEEDBACK", "REJECTED")]
+
+
+def test_executor_rejects_tasks_outside_configured_goal_scope(config):
+    from sentry_core.execution import Executor
+    from sentry_core.geometry import TacticalMap
+    from sentry_core.model import Task, TaskType, Vec2
+
+    scoped = replace(config, goal_scope="own_half")
+    machine = Executor(TacticalMap(scoped))
+    machine.safety(True, 10.0, 100.0)
+    out_of_scope = Task("s1", 1, 1, 10.0, 12.0, TaskType.SUPPORT, "enemy_outpost",
+                        1, "support_north", Vec2(15.0, 8.0), 0.0, 0.8, 0.9, False,
+                        "TEAM_SUPPORT_HIGH")
+    machine.submit(out_of_scope, 10.0, 100.0)
+    assert [(c.kind, c.state) for c in machine.drain()] == [("FEEDBACK", "REJECTED")]

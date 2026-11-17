@@ -110,6 +110,7 @@ zones:
   - {id: own_base, structure: own_base, center: [2.411, 7.5], radius: 3.0, intent: DEFEND_BASE, importance: 1.0}
   - {id: own_outpost, structure: own_outpost, center: [10.976, 11.4], radius: 2.5, intent: DEFEND_BASE, importance: 0.8}
   - {id: enemy_outpost, structure: enemy_outpost, center: [17.024, 3.6], radius: 3.5, intent: ATTACK_OUTPOST, importance: 0.9}
+  - {id: enemy_front, center: [20.5, 7.5], radius: 4.0, intent: CONTEST_AREA, importance: 0.78}
   - {id: central_highland, polygon: [[12.392, 2.66], [12.63, 2.66], [12.62, 3.842], [11.19, 5.867], [11.19, 9.569], [11.553, 10.395], [10.59, 10.395], [10.355, 9.857], [10.355, 5.582]], intent: CONTEST_AREA, importance: 0.65}
 # Preferred positions are extra candidates, never a whitelist.
 points:

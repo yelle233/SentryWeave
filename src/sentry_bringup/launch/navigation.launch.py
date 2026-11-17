@@ -18,8 +18,11 @@ def _nodes(context):
     share = Path(get_package_share_directory("sentry_bringup"))
     namespace = LaunchConfiguration("namespace").perform(context)
     sim = LaunchConfiguration("use_sim_time").perform(context).lower() == "true"
-    tactics = load_config(LaunchConfiguration("config_file").perform(context),
-                          LaunchConfiguration("own_team").perform(context) or None)
+    tactics = load_config(
+        LaunchConfiguration("config_file").perform(context),
+        LaunchConfiguration("own_team").perform(context) or None,
+        goal_scope=LaunchConfiguration("goal_scope").perform(context) or None,
+    )
     mask_directory = tempfile.mkdtemp(prefix="sentryweave-keepout-")
     mask = render_keepout(tactics, LaunchConfiguration("map").perform(context), mask_directory)
     topic_prefix = "/" + namespace.strip("/") if namespace.strip("/") else ""
@@ -88,6 +91,9 @@ def generate_launch_description():
         DeclareLaunchArgument("config_file",
                               default_value=str(share / "config/tactics_rmuc2027.yaml")),
         DeclareLaunchArgument("own_team", default_value=""),
+        DeclareLaunchArgument(
+            "goal_scope", default_value="",
+            description="full, own_half_and_highland or own_half; empty uses config_file"),
         DeclareLaunchArgument("params_file", default_value=str(share / "config/nav2.yaml")),
         DeclareLaunchArgument("controller_overlay", default_value=""),
         OpaqueFunction(function=_nodes),

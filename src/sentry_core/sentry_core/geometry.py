@@ -12,12 +12,47 @@ import math
 
 import numpy as np
 
-from .config import Config, Zone
+from .config import Config, Zone, goal_in_scope, is_highland_zone, own_half_low
 from .model import Vec2
 from .shapes import area_polygon, inflate
 
 EPS = 1e-4
 CHUNK = 4096
+
+
+def _zone_mask(zone: Zone, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    if not zone.polygon:
+        return (x - zone.center.x) ** 2 + (y - zone.center.y) ** 2 <= zone.radius ** 2
+    inside = np.zeros(x.shape, dtype=bool)
+    boundary = np.zeros(x.shape, dtype=bool)
+    n = len(zone.polygon)
+    for i in range(n):
+        a, b = zone.polygon[i], zone.polygon[(i + 1) % n]
+        dx, dy = b.x - a.x, b.y - a.y
+        cross = dx * (y - a.y) - dy * (x - a.x)
+        boundary |= ((np.abs(cross) <= 1e-9)
+                     & (x >= min(a.x, b.x) - 1e-9) & (x <= max(a.x, b.x) + 1e-9)
+                     & (y >= min(a.y, b.y) - 1e-9) & (y <= max(a.y, b.y) + 1e-9))
+        straddle = (a.y > y) != (b.y > y)
+        if dy != 0.0:
+            x_int = a.x + (y - a.y) * dx / dy
+            inside ^= straddle & (x < x_int)
+    return inside | boundary
+
+
+def scope_mask(config: Config, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Boolean mask of coordinates allowed by ``config.goal_scope``."""
+    if config.goal_scope == "full":
+        return np.ones(x.shape, dtype=bool)
+    mid_x = 0.5 * (config.bounds[0] + config.bounds[2])
+    own_half = x <= mid_x + 1e-6 if own_half_low(config) else x >= mid_x - 1e-6
+    highland = np.zeros(x.shape, dtype=bool)
+    for zone in config.zones:
+        if is_highland_zone(zone):
+            highland |= _zone_mask(zone, x, y)
+    if config.goal_scope == "own_half_and_highland":
+        return own_half | highland
+    return own_half & ~highland
 
 
 def _arrays(rows):
@@ -75,6 +110,7 @@ def _grid(bounds, radius, resolution, rows):
 class TacticalMap:
     def __init__(self, config: Config):
         self.config = config
+        self._scope_grid_mask: np.ndarray | None = None
         grown = [inflate(area_polygon(item), config.robot_radius)
                  for item in (*config.obstacles, *config.keepouts)]
         self._rows = tuple(tuple(rows) for rows, _ in grown)
@@ -294,6 +330,16 @@ class TacticalMap:
         c = self.config
         return _grid(c.bounds, c.robot_radius, c.grid_resolution, self._rows)
 
+    @property
+    def _scope_mask(self) -> np.ndarray:
+        if self._scope_grid_mask is None:
+            xs, ys, _, _ = self._grid
+            gx, gy = np.meshgrid(xs, ys, indexing="ij")
+            mask = scope_mask(self.config, gx, gy)
+            mask.flags.writeable = False
+            self._scope_grid_mask = mask
+        return self._scope_grid_mask
+
     @lru_cache(maxsize=4096)
     def component(self, p: Vec2) -> int:
         """Grid component of a legal point; -1 when illegal or not linked to a free cell."""
@@ -317,17 +363,23 @@ class TacticalMap:
         label = self.component(start)
         return label >= 0 and label == self.component(goal)
 
-    def nearest_legal(self, p: Vec2, anchor: Vec2 | None = None) -> Vec2 | None:
+    def nearest_legal(self, p: Vec2, anchor: Vec2 | None = None,
+                      in_scope: bool = False) -> Vec2 | None:
         """``p`` itself when legal (and linked to ``anchor``), else the nearest free cell centre."""
         if not p.finite:
             return None
         label = None if anchor is None else self.component(anchor)
         if label is not None and label < 0:
             return None
-        if self.legal(p) and (label is None or self.component(p) == label):
+        scoped = in_scope and self.config.goal_scope != "full"
+        if (self.legal(p) and (label is None or self.component(p) == label)
+                and (not scoped or goal_in_scope(self.config, p))):
             return p
         xs, ys, free, labels = self._grid
-        ii, jj = np.nonzero(free if label is None else labels == label)
+        allowed = free if label is None else labels == label
+        if scoped:
+            allowed = allowed & self._scope_mask
+        ii, jj = np.nonzero(allowed)
         if not len(ii):
             return None
         k = int(np.argmin((xs[ii] - p.x) ** 2 + (ys[jj] - p.y) ** 2))

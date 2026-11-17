@@ -108,3 +108,49 @@ def test_rl_mirror_is_auto_true_or_false(tmp_path):
             decision("BLUE", False)
     finally:
         rclpy.shutdown()
+
+
+def test_goal_scope_launch_argument_and_node_parameter(tmp_path):
+    import rclpy
+    import yaml
+    from rclpy.exceptions import InvalidParameterTypeException
+    from rclpy.parameter import Parameter
+    from sentry_ros.decision_node import DecisionNode
+    from test_model_fallback import SEASON
+    from test_ros_inputs import launch_argument_default
+
+    assert launch_argument_default(
+        "goal_scope", "decision.launch.py", "navigation.launch.py", "robot.launch.py"
+    ) == ""
+
+    raw = yaml.safe_load(SEASON.read_text(encoding="utf-8"))
+    raw.update(goal_scope="own_half_and_highland", field=str(SEASON.parent / raw["field"]))
+    scoped_yaml = tmp_path / "tactics_scoped.yaml"
+    scoped_yaml.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    def make_node(cfg_path, *scope):
+        return DecisionNode(parameter_overrides=[
+            Parameter("config_file", value=str(cfg_path)),
+            *(Parameter("goal_scope", value=v) for v in scope),
+        ])
+
+    rclpy.init()
+    try:
+        for cfg_path, override, expected in (
+            (SEASON, (), "full"),
+            (scoped_yaml, (), "own_half_and_highland"),
+            (scoped_yaml, ("",), "own_half_and_highland"),
+            (scoped_yaml, ("own_half",), "own_half"),
+            (SEASON, ("own_half_and_highland",), "own_half_and_highland"),
+        ):
+            node = make_node(cfg_path, *override)
+            try:
+                assert node.config.goal_scope == expected
+            finally:
+                node.destroy_node()
+        with pytest.raises(ValueError, match="goal_scope"):
+            make_node(SEASON, "invalid_scope")
+        with pytest.raises(InvalidParameterTypeException):
+            make_node(SEASON, False)
+    finally:
+        rclpy.shutdown()

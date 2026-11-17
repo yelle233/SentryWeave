@@ -8,7 +8,7 @@ robot's own connected region; preferred field points are added unchanged.
 from dataclasses import dataclass
 import math
 
-from .config import Config, Zone
+from .config import Config, Zone, zone_in_scope
 from .geometry import TacticalMap
 from .model import IntentType, TaskType, Vec2, World
 
@@ -66,11 +66,15 @@ class GoalGenerator:
         origin = self.arena.origin(world.self_track.position) if world.self_track else None
         if origin is None:
             return [g for g in goals if self.arena.legal(g.position)]
+        scoped = self.config.goal_scope != "full"
         for goal in (*self._defense(world, threats), *self._support(world, intents),
                      *self._areas()):
-            position = self.arena.nearest_legal(goal.position, anchor=origin)
+            zone = self.zones[goal.zone_id]
+            if scoped and not zone_in_scope(self.config, zone):
+                continue
+            position = self.arena.nearest_legal(goal.position, anchor=origin, in_scope=scoped)
             if position is None or (goal.source == "contest"
-                                    and not self.zones[goal.zone_id].contains(position)
+                                    and not zone.contains(position)
                                     and position.distance(goal.position) > 1.0):
                 continue
             if any(g.kind == goal.kind and g.zone_id == goal.zone_id
