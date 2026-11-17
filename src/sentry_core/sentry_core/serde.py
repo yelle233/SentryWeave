@@ -31,6 +31,13 @@ def world_from_dict(raw: dict) -> World:
                      t["generation"], t["velocity_valid"],
                      tuple(observation(o) for o in t.get("history", [])))
 
+    def _robot_status(value: dict) -> RobotStatus:
+        item = {**value, "team": Team(value["team"])}
+        for timer_key in ("posture_time_sec", "enhanced_used_sec"):
+            if item.get(timer_key) is not None:
+                item[timer_key] = tuple(float(x) for x in item[timer_key])
+        return RobotStatus(**item)
+
     referee = raw.get("referee")
     game = raw.get("game")
     return World(
@@ -40,7 +47,6 @@ def world_from_dict(raw: dict) -> World:
         Referee(**{**referee, "phase": Phase(referee["phase"])}) if referee else None,
         raw["mode"], raw["frame"], raw.get("epoch", 0),
         GameState(**{**game, "phase": Phase(game["phase"])}) if game else None,
-        {int(key): RobotStatus(**{**value, "team": Team(value["team"])})
-         for key, value in raw.get("robots", {}).items()},
+        {int(key): _robot_status(value) for key, value in raw.get("robots", {}).items()},
         {key: StructureState(**value) for key, value in raw.get("structures", {}).items()},
     )

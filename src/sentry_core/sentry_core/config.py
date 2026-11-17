@@ -121,6 +121,20 @@ class Config:
     enemy_low_hp_bonus: float = 0.15
     stale_enemy_weight: float = 0.5
     goal_scope: str = "full"
+    hit_timeout: float = 5.0
+    spin_speed_rad_s: float = 7.0
+    spin_hold_sec: float = 3.5
+    spin_recover_hold_sec: float = 5.0
+    spin_combat_range: float = 7.0
+    spin_flip_sec: float = 2.2
+    spin_hit_flip_min_gap_sec: float = 0.6
+    transit_distance_m: float = 3.5
+    posture_cooldown_sec: float = 5.0
+    posture_decay_sec: float = 180.0
+    enhanced_budget_sec: float = 15.0
+    posture_enhanced_margin_sec: float = 0.3
+    posture_attack_range: float = 8.0
+    posture_hit_window_sec: float = 2.5
 
     def structure(self, name: str) -> Structure | None:
         return next((s for s in self.structures if s.name == name), None)
@@ -151,9 +165,16 @@ def validate_config(config: Config) -> Config:
                  "referee_timeout", "retention", "max_speed", "history_sec", "cooldown",
                  "task_lease", "nominal_speed", "ally_clearance", "game_timeout",
                  "robot_status_timeout", "structure_timeout", "intercept_distance",
-                 "defense_radius", "support_back", "support_standoff", "goal_update_distance"):
+                 "defense_radius", "support_back", "support_standoff", "goal_update_distance",
+                 "hit_timeout", "spin_speed_rad_s", "spin_hold_sec", "spin_recover_hold_sec",
+                 "spin_combat_range", "spin_flip_sec", "spin_hit_flip_min_gap_sec",
+                 "transit_distance_m", "posture_cooldown_sec", "posture_decay_sec",
+                 "enhanced_budget_sec", "posture_enhanced_margin_sec", "posture_attack_range",
+                 "posture_hit_window_sec"):
         if not math.isfinite(getattr(config, name)) or getattr(config, name) <= 0:
             raise ValueError(f"{name} must be finite and positive")
+    if config.hit_timeout < config.spin_hold_sec:
+        raise ValueError("hit_timeout must be at least spin_hold_sec")
     if not config.observed_age < config.predicted_age < config.retention:
         raise ValueError("observed_age < predicted_age < retention is required")
     if config.min_hold < 0 or not math.isfinite(config.min_hold):

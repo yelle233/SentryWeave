@@ -10,7 +10,7 @@ import math
 
 from .config import goal_in_scope
 from .geometry import TacticalMap
-from .model import Task, TaskType
+from .model import POSTURES, Task, TaskType
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,12 @@ class Executor:
                 or task.created_at > ros + 0.05 or task.valid_until <= ros
                 or task.valid_until > ros + 2 * self.arena.config.task_lease
                 or task.valid_until <= task.created_at):
+            return False
+        if (task.posture not in POSTURES
+                or not isinstance(task.posture_enhanced, bool)
+                or not isinstance(task.spin_enabled, bool)
+                or isinstance(task.spin_rate_rad_s, bool)
+                or not math.isfinite(task.spin_rate_rad_s)):
             return False
         if task.kind == TaskType.HOLD:
             return task.goal is None

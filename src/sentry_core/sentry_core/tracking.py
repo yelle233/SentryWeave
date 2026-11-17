@@ -5,8 +5,8 @@ import math
 
 from .config import Config
 from .model import (
-    TEAM_COLORS, GameState, Observation, Phase, Referee, RobotStatus, StructureState, Team, Track,
-    TrackStatus, Vec2, World,
+    POSTURES, TEAM_COLORS, GameState, Observation, Phase, Referee, RobotStatus, StructureState,
+    Team, Track, TrackStatus, Vec2, World,
 )
 
 
@@ -31,9 +31,13 @@ class _Fields:
             if value is not None and (old is None or stamp >= old[1]):
                 self.values[name] = (value, stamp, source)
 
-    def fresh(self, now: float, timeout: float):
-        items = {name: item for name, item in self.values.items()
-                 if -0.05 <= now - item[1] <= timeout}
+    def fresh(self, now: float, timeout: float, field_timeouts: dict[str, float] | None = None):
+        items = {
+            name: item
+            for name, item in self.values.items()
+            if -0.05 <= now - item[1] <= (field_timeouts.get(name, timeout)
+                                          if field_timeouts else timeout)
+        }
         if not items:
             return None
         source = 0
@@ -41,6 +45,12 @@ class _Fields:
             source |= bits
         return ({name: item[0] for name, item in items.items()},
                 max(item[1] for item in items.values()), source)
+
+
+def _valid_timers(values) -> bool:
+    return (values is None or (isinstance(values, tuple) and len(values) == 3
+                               and all(not isinstance(v, bool) and isinstance(v, (int, float))
+                                       and math.isfinite(v) and v >= 0 for v in values)))
 
 
 class WorldModel:
@@ -171,7 +181,10 @@ class WorldModel:
                 or game.phase not in Phase
                 or (game.own_team is not None and game.own_team not in TEAM_COLORS)
                 or (game.remaining is not None
-                    and (not math.isfinite(game.remaining) or game.remaining < 0))
+                    and (isinstance(game.remaining, bool)
+                         or not math.isfinite(game.remaining) or game.remaining < 0))
+                or any(v is not None and (isinstance(v, bool) or not math.isfinite(v) or v < 0)
+                       for v in (game.own_gold, game.enemy_gold))
                 or (game.supply_available is not None
                     and not isinstance(game.supply_available, bool))):
             self.rejections += 1
@@ -180,21 +193,36 @@ class WorldModel:
             "season": game.season or None, "own_team": game.own_team,
             "phase": game.phase if game.phase != Phase.UNKNOWN else None,
             "remaining": game.remaining, "supply_available": game.supply_available,
+            "own_gold": game.own_gold, "enemy_gold": game.enemy_gold,
         }, game.stamp, game.source)
         return True
 
     def update_robot(self, status: RobotStatus, received_at: float) -> bool:
         self._clock(received_at)
-        numbers = (status.hp, status.max_hp, status.ammo)
+        numbers = (status.hp, status.max_hp, status.ammo, status.heat_ratio,
+                   status.last_hit_stamp, status.posture_ready_at)
         valid = (
             1 <= status.robot_id <= 65535 and status.team in (Team.ALLY, Team.ENEMY)
             and self._accept(status.stamp, received_at, self.config.robot_status_timeout,
                              status.source)
-            and all(v is None or math.isfinite(v) for v in numbers)
+            and all(v is None or (not isinstance(v, bool) and math.isfinite(v)) for v in numbers)
             and (status.hp is None or status.hp >= 0)
             and (status.max_hp is None or status.max_hp > 0)
             and (status.ammo is None or 0 <= status.ammo <= 1)
-            and (status.level is None or (isinstance(status.level, int) and status.level >= 0))
+            and (status.heat_ratio is None or 0 <= status.heat_ratio <= 1)
+            and (status.last_hit_stamp is None
+                 or 0 <= status.last_hit_stamp <= received_at + 0.05)
+            and (status.hit_armor_id is None
+                 or (not isinstance(status.hit_armor_id, bool)
+                     and isinstance(status.hit_armor_id, int)
+                     and 0 <= status.hit_armor_id <= 5))
+            and (status.posture is None or status.posture in POSTURES)
+            and (status.posture_enhanced is None or isinstance(status.posture_enhanced, bool))
+            and (status.posture_ready_at is None or status.posture_ready_at >= 0)
+            and _valid_timers(status.posture_time_sec)
+            and _valid_timers(status.enhanced_used_sec)
+            and (status.level is None or (not isinstance(status.level, bool)
+                                          and isinstance(status.level, int) and status.level >= 0))
             and (status.alive is None or isinstance(status.alive, bool))
         )
         entry = self._robots.get(status.robot_id)
@@ -204,8 +232,34 @@ class WorldModel:
             return False
         if entry is None:
             entry = self._robots[status.robot_id] = (status.team, _Fields())
-        entry[1].merge({"hp": status.hp, "max_hp": status.max_hp, "alive": status.alive,
-                        "level": status.level, "ammo": status.ammo}, status.stamp, status.source)
+        fields = entry[1]
+        prev_hp_entry = fields.values.get("hp")
+        hit_stamp = status.last_hit_stamp
+        armor_id = status.hit_armor_id
+        if hit_stamp is not None and received_at - hit_stamp > self.config.hit_timeout:
+            # Upstream bridges/simulators may repeat the last hit timestamp indefinitely;
+            # ignore the expired hit without rejecting fresh HP/posture fields.
+            hit_stamp = None
+            armor_id = None
+        if (status.robot_id == self.config.self_id and status.team == Team.ALLY
+                and prev_hp_entry is not None
+                and 0 <= status.stamp - prev_hp_entry[1] <= self.config.robot_status_timeout
+                and status.hp is not None and status.hp < float(prev_hp_entry[0]) - 1e-6
+                and (hit_stamp is None or hit_stamp <= prev_hp_entry[1])):
+            hit_stamp = status.stamp
+        fields.merge({
+            "hp": status.hp, "max_hp": status.max_hp, "alive": status.alive,
+            "level": status.level, "ammo": status.ammo, "heat_ratio": status.heat_ratio,
+            "posture": status.posture, "posture_enhanced": status.posture_enhanced,
+            "posture_ready_at": status.posture_ready_at,
+            "posture_time_sec": (tuple(float(x) for x in status.posture_time_sec)
+                                 if status.posture_time_sec is not None else None),
+            "enhanced_used_sec": (tuple(float(x) for x in status.enhanced_used_sec)
+                                  if status.enhanced_used_sec is not None else None),
+        }, status.stamp, status.source)
+        if hit_stamp is not None:
+            fields.merge({"last_hit_stamp": float(hit_stamp), "hit_armor_id": armor_id},
+                         float(hit_stamp), status.source)
         return True
 
     def update_structure(self, state: StructureState, received_at: float) -> bool:
@@ -231,12 +285,19 @@ class WorldModel:
         fresh = self._game.fresh(now, self.config.game_timeout)
         if fresh is not None:
             values, stamp, source = fresh
-            game = GameState(stamp, values.get("season", ""), values.get("own_team"),
-                             values.get("phase", Phase.UNKNOWN), values.get("remaining"),
-                             values.get("supply_available"), source)
+            game = GameState(
+                stamp, values.get("season", ""), values.get("own_team"),
+                values.get("phase", Phase.UNKNOWN), values.get("remaining"),
+                values.get("supply_available"), source,
+                own_gold=values.get("own_gold"), enemy_gold=values.get("enemy_gold"),
+            )
         robots = {}
+        robot_timeouts = {
+            "last_hit_stamp": self.config.hit_timeout,
+            "hit_armor_id": self.config.hit_timeout,
+        }
         for robot_id, (team, fields) in list(self._robots.items()):
-            fresh = fields.fresh(now, self.config.robot_status_timeout)
+            fresh = fields.fresh(now, self.config.robot_status_timeout, robot_timeouts)
             if fresh is None:
                 del self._robots[robot_id]
                 continue

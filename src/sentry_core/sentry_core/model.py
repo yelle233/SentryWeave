@@ -114,6 +114,9 @@ SOURCE_ONBOARD = 4
 SOURCE_TEAM = 8
 TEAM_COLORS = ("RED", "BLUE")
 STRUCTURE_IDS = ("own_base", "own_outpost", "enemy_base", "enemy_outpost")
+POSTURES = ("attack", "defense", "move")
+POSTURE_CODES = {"attack": 1, "defense": 2, "move": 3}
+POSTURE_BY_CODE = {1: "attack", 2: "defense", 3: "move"}
 
 
 def _ratio(value: float | None, maximum: float | None) -> float | None:
@@ -133,6 +136,8 @@ class GameState:
     remaining: float | None = None
     supply_available: bool | None = None
     source: int = SOURCE_REFEREE
+    own_gold: float | None = None
+    enemy_gold: float | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +153,14 @@ class RobotStatus:
     level: int | None = None
     ammo: float | None = None
     source: int = 0
+    heat_ratio: float | None = None
+    last_hit_stamp: float | None = None
+    hit_armor_id: int | None = None
+    posture: str | None = None
+    posture_enhanced: bool | None = None
+    posture_ready_at: float | None = None
+    posture_time_sec: tuple[float, float, float] | None = None
+    enhanced_used_sec: tuple[float, float, float] | None = None
 
     @property
     def hp_ratio(self) -> float | None:
@@ -256,6 +269,10 @@ class Task:
     confidence: float = 0.0
     urgent: bool = False
     reason: str = ""
+    posture: str = "move"
+    posture_enhanced: bool = False
+    spin_enabled: bool = False
+    spin_rate_rad_s: float = 0.0
 
     @property
     def key(self) -> tuple:

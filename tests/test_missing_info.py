@@ -69,8 +69,8 @@ def test_full_information_supports_the_teammate(expected):
     decision = decide(expected, build(expected))
     assert decision.task.kind == TaskType.SUPPORT
     assert decision.missing_info["completeness"] == {
-        "game": 1.0, "self": 1.0, "allies": 1.0, "enemies": 1.0, "robot_status": 1.0,
-        "structures": 1.0}
+        "game": 1.0, "self": 1.0, "allies": 1.0, "enemies": 1.0,
+        "ally_status": 1.0, "enemy_status": 1.0, "structures": 1.0}
     assert decision.missing_info["missing"] == []
 
 
@@ -79,7 +79,7 @@ def test_full_information_supports_the_teammate(expected):
     ({"self_status": False}, "self.hp", "DEFEND"),
     ({"ally": False}, "allies.positions 0/1", "DEFEND"),
     ({"enemies": ()}, "enemies.positions 0/1", "SUPPORT"),
-    ({"enemy_hp": None}, "robots.hp 1/2", "SUPPORT"),
+    ({"enemy_hp": None}, "enemies.hp 0/1", "SUPPORT"),
     ({"outpost": None}, "structure.enemy_outpost", "SUPPORT"),
     ({"outpost": False}, None, "DEFEND"),
     ({"ally_alive": False}, None, "DEFEND"),

@@ -15,6 +15,7 @@ from .intent import IntentEstimator
 from .model import (
     Candidate, Decision, IntentType, Phase, Task, TaskType, Team, Threat, TrackStatus, World,
 )
+from .posture_spin import PosturePolicy, SpinPolicy
 
 
 FEATURES = ("strategic", "cooperation", "urgency", "risk", "travel", "switching")
@@ -60,6 +61,8 @@ class DecisionEngine:
         self.arena = TacticalMap(config)
         self.estimator = IntentEstimator(config, self.arena, model)
         self.generator = GoalGenerator(self.config, self.arena)
+        self.spin_policy = SpinPolicy(self.config)
+        self.posture_policy = PosturePolicy(self.config)
         self.session_id = session_id or uuid.uuid4().hex
         self.baseline, self.hysteresis = baseline, hysteresis
         self.goal_prior = goal_prior
@@ -381,6 +384,8 @@ class DecisionEngine:
         if (self._last_time is not None and world.stamp < self._last_time
                 or self._epoch is not None and world.epoch != self._epoch):
             self.estimator.reset()
+            self.spin_policy.reset()
+            self.posture_policy.reset()
             self._cooldowns.clear()
             self.current = None
             self.session_id = uuid.uuid4().hex
@@ -418,6 +423,13 @@ class DecisionEngine:
         if subgoal is not None:
             # Only the goal moves: kind, zone, target and goal id stay the rules' choice.
             chosen = replace(chosen, goal=subgoal)
+        unsafe = self._unsafe(world)
+        spin = self.spin_policy.decide(
+            world, view, chosen.kind, chosen.goal, chosen.urgent, unsafe
+        )
+        posture = self.posture_policy.decide(
+            world, view, chosen.kind, chosen.goal, chosen.urgent, threats, unsafe
+        )
         moved = (self.current is not None and self.current.key == chosen.key
                  and chosen.goal is not None and self.current.goal is not None
                  and chosen.goal.distance(self.current.goal) > self.config.goal_update_distance)
@@ -434,15 +446,21 @@ class DecisionEngine:
                 world.stamp + self.config.task_lease, chosen.kind, chosen.zone_id,
                 chosen.target_id, chosen.goal_id, chosen.goal, chosen.yaw,
                 chosen.utility, chosen.confidence, chosen.urgent, chosen.reason,
+                posture=posture.posture, posture_enhanced=posture.enhanced,
+                spin_enabled=spin.enabled, spin_rate_rad_s=spin.rate_rad_s,
             )
             self._refined = subgoal is not None
         else:
             self.current = replace(self.current, world_seq=world.seq,
                                    valid_until=world.stamp + self.config.task_lease,
                                    utility=chosen.utility, confidence=chosen.confidence,
-                                   urgent=chosen.urgent, reason=chosen.reason)
+                                   urgent=chosen.urgent, reason=chosen.reason,
+                                   posture=posture.posture, posture_enhanced=posture.enhanced,
+                                   spin_enabled=spin.enabled, spin_rate_rad_s=spin.rate_rad_s)
         policy_info = dict(self.goal_prior.info) if self.goal_prior else {}
         policy_info["goal_scope"] = self.config.goal_scope
+        policy_info["posture"] = posture.to_dict()
+        policy_info["spin"] = spin.to_dict()
         if self.model_fallbacks:
             policy_info["model_fallbacks"] = copy.deepcopy(self.model_fallbacks)
         return Decision(self.current, intents, threats, tuple(candidates),
