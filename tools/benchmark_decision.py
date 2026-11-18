@@ -54,10 +54,20 @@ def scenario(config, steps: int, dt: float = 0.5):
                 target = arena.nearest_legal(base, own)
                 enemies[i] = arena.advance(p, target, 1.0 * dt / 5)
                 model.observe(Observation(101 + i, Team.ENEMY, enemies[i], stamp), stamp)
+        postures = ("move", "attack", "defense")
+        posture = postures[(k // 12) % 3]
+        hit_stamp = now - 0.2 if k % 20 == 5 else None
         model.update_game(GameState(now, config.season, config.own_team, Phase.RUNNING,
-                                    max(0.0, 420.0 - k * dt), True), now)
-        model.update_robot(RobotStatus(config.self_id, Team.ALLY, now, 300.0, 400.0, True,
-                                       ammo=0.8, source=1), now)
+                                    max(0.0, 420.0 - k * dt), True, own_gold=320.0), now)
+        model.update_robot(RobotStatus(
+            config.self_id, Team.ALLY, now, 300.0, 400.0, True,
+            ammo=0.8, source=1, heat_ratio=min(0.95, (k % 15) * 0.06),
+            last_hit_stamp=hit_stamp, hit_armor_id=(k % 4) if hit_stamp is not None else None,
+            posture=posture, posture_enhanced=(k % 30 == 10),
+            posture_ready_at=now - 1.0,
+            posture_time_sec=(k * 0.15, k * 0.10, k * 0.25),
+            enhanced_used_sec=(min(12.0, k * 0.03), min(12.0, k * 0.02), 0.0),
+        ), now)
         for name in ("own_base", "own_outpost", "enemy_base", "enemy_outpost"):
             model.update_structure(StructureState(name, now, alive=True, source=1), now)
         yield model.snapshot(now)
@@ -72,13 +82,16 @@ def measure(config, steps: int, prior_path=None) -> dict:
     started = time.perf_counter()
     decider = engine()
     setup_ms = (time.perf_counter() - started) * 1000
-    wall, cpu, tasks = [], [], {}
+    wall, cpu, tasks, postures = [], [], {}, {}
+    spin_steps = 0
     for world in worlds:
         w0, c0 = time.perf_counter(), time.process_time()
         decision = decider.step(world)
         wall.append((time.perf_counter() - w0) * 1000)
         cpu.append((time.process_time() - c0) * 1000)
         tasks[decision.task.kind.name] = tasks.get(decision.task.kind.name, 0) + 1
+        postures[decision.task.posture] = postures.get(decision.task.posture, 0) + 1
+        spin_steps += int(decision.task.spin_enabled)
     tracemalloc.start()
     decider = engine()
     for world in worlds[:50]:
@@ -93,6 +106,7 @@ def measure(config, steps: int, prior_path=None) -> dict:
     return {"steps": steps, "setup_ms": setup_ms, "step_wall_ms": summary(wall),
             "step_cpu_ms": summary(cpu), "cpu_share_at_2hz": float(np.mean(cpu)) / 500.0,
             "tracemalloc_peak_kib": peak / 1024, "tasks": tasks,
+            "postures": postures, "spin_steps": spin_steps,
             "obstacles": len(config.obstacles) + len(config.keepouts),
             "graph_corners": len(TacticalMap(config).corners)}
 

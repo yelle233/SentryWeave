@@ -246,9 +246,9 @@ ros2 launch sentry_bringup decision.launch.py \
 若已导出离线 RL 模型，可附加 `--rl-model artifacts/rl/runs/iql-seed7/actor.json` 一并测量含 `GoalPrior` 推理与子目标投影的单步耗时。
 
 健康参考范围（对照仓库实测基线 [`benchmarks/decision-latency.json`](../benchmarks/decision-latency.json) 与 [`benchmarks/runtime-footprint.json`](../benchmarks/runtime-footprint.json)，详见 [实验与性能基准](benchmarks.md)）：
-- 在包含 **77 个障碍/禁区多边形、149 个可见图角点**的 RMUC 2027 场地上，`DecisionEngine.step` 正常单步耗时为**数毫秒至十余毫秒**（x86_64 基线 `p50 ≈ 2.4 ms`、`p95 ≈ 16.5 ms`），远小于 `2 Hz` 决策周期（**`500 ms`** 预算），纯核心单核 CPU 占比约 `1.2%`；
-- 纯 NumPy 离线 RL 单次前向推理（`NumpyNavigationPolicy.predict`）：MLP（BC/IQL，约 `535 KB`）仅需微秒级（`~6–17 μs`），Decision Transformer（`context=8`，约 `2.8 MB`）不到 `1 ms`（`~0.29–0.73 ms`），车端无需安装 PyTorch 或占用自瞄 GPU；
-- ROS 2 `decision` 节点在 `2 Hz` 在线运行（含 DDS 消息编解码与滚动 JSONL 写入）单核 CPU 占用约 `3.2%–3.7%`，常驻内存 RSS 约 `72–80 MB`。
+- 在包含 **77 个障碍/禁区多边形、149 个可见图角点**的 RMUC 2027 场地上（含 `enemy_front` 纵深区、2027 姿态与受击小陀螺评估），`DecisionEngine.step` 正常单步耗时为**数毫秒至十余毫秒**（x86_64 基线：规则 `p50 ≈ 3.1 ms`、`p95 ≈ 17.1 ms`，挂载 v2 IQL `p50 ≈ 4.8 ms`、`p95 ≈ 19.5 ms`），远小于 `2 Hz` 决策周期（**`500 ms`** 预算），纯核心单核 CPU 占比约 `1.35%–1.67%`；
+- 纯 NumPy 离线 RL 单次前向推理（`NumpyNavigationPolicy.predict`）：MLP（BC/IQL v2 `85→128→128→6`，约 `575 KiB`）仅需微秒级（`~7.0–20.6 μs`），Decision Transformer v2（`85→6`, `context=8`，约 `2.73 MiB`）不到 `1 ms`（`~0.30–0.73 ms`），车端无需安装 PyTorch 或占用自瞄 GPU；
+- ROS 2 `decision` 节点在 `2 Hz` 在线运行（含 DDS 消息编解码、2027 姿态 `0x0120` 与小陀螺发布、受击瞬时重评估及滚动 JSONL 写入）单核 CPU 占用约 `3.7%–4.4%`，常驻内存 RSS 约 `78–79 MiB`。
 
 ### 4.2 赛后比赛日志一键健康检查脚本
 

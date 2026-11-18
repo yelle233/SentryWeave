@@ -1,31 +1,31 @@
 {
   "schema_version": 1,
-  "recorded_on": "2026-11-16",
+  "recorded_on": "2026-11-18",
   "onboard_dependencies": ["numpy", "PyYAML"],
   "requires_gpu_or_torch": false,
   "models": {
     "bc_iql": {
-      "label_zh": "BC / IQL (MLP 73→128→128→2)",
-      "label_en": "BC / IQL (MLP 128x2)",
-      "p_core_us": 5.9,
-      "e_core_us": 16.7,
-      "artifact_kib": 535.0
+      "label_zh": "BC / IQL v2 (MLP 85→128→128→6)",
+      "label_en": "BC / IQL v2 (MLP 85->6)",
+      "p_core_us": 7.0,
+      "e_core_us": 20.6,
+      "artifact_kib": 574.6
     },
     "dt": {
-      "label_zh": "Decision Transformer (ctx=8, 2层)",
-      "label_en": "Decision Transformer (ctx=8)",
-      "p_core_us": 290.0,
-      "e_core_us": 730.0,
-      "artifact_kib": 2867.2
+      "label_zh": "Decision Transformer v2 (ctx=8, 2层)",
+      "label_en": "Decision Transformer v2 (ctx=8)",
+      "p_core_us": 297.7,
+      "e_core_us": 732.0,
+      "artifact_kib": 2790.3
     }
   },
   "ros_decision_node_2hz": {
     "rate_hz": 2.0,
-    "single_core_cpu_pct_low": 3.2,
-    "single_core_cpu_pct_high": 3.7,
-    "rss_mib_low": 72.0,
-    "rss_mib_high": 80.0,
-    "includes": "rclpy timer + WorldState deserialization + DecisionEngine.step + JSONL trace"
+    "single_core_cpu_pct_low": 3.7,
+    "single_core_cpu_pct_high": 4.4,
+    "rss_mib_low": 77.6,
+    "rss_mib_high": 78.9,
+    "includes": "rclpy timer + WorldState decode + DecisionEngine.step (incl. 2027 posture/spin & hit immediate trigger) + SentryRefereeCmd/spin publish + JSONL trace"
   },
-  "notes": "Model timings are pure NumPy float32 single-step forward passes (NumpyNavigationPolicy.predict) without PyTorch or CUDA. ROS node footprint is measured on ROS 2 Jazzy at 2 Hz."
+  "notes": "Model timings are pure NumPy float32 single-step forward passes (NumpyNavigationPolicy.predict, v2 85->6 joint navigation+posture; v1 73->2 MLP is 6.4/17.8 us, 534.6 KiB) without PyTorch or CUDA. ROS node footprint is measured on ROS 2 Jazzy (3.7% normalized to 2.0 Hz; 4.4% including periodic hit-triggered immediate re-decisions at 2.4 Hz)."
 }

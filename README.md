@@ -148,12 +148,12 @@ flowchart LR
 
 | 实测维度（Python 3.12.3 · NumPy 2.5.4 · x86_64） | 场地 / 模型规模 | 关键耗时指标 | CPU / 内存 / 产物体积 |
 |---|---|---|---|
-| `DecisionEngine.step` 单步耗时（`rmuc2027`） | 28×15 m · 77 障碍/禁区 · 149 可见图角点 | `p50 = 2.44 ms` · `p95 = 16.50 ms` · `mean = 6.08 ms` · `max = 40.80 ms`（建图 `119.28 ms`） | `2 Hz`（`500 ms` 预算）纯核心单核 CPU **1.22%** · Python 峰值堆内存 **3.70 MiB** |
-| `DecisionEngine.step` 单步耗时（`rmuc2026`） | 28×15 m · 62 障碍/禁区 · 113 可见图角点 | `p50 = 2.40 ms` · `p95 = 9.82 ms` · `mean = 3.92 ms` · `max = 24.20 ms`（建图 `44.58 ms`） | `2 Hz` 纯核心单核 CPU **0.79%** · Python 峰值堆内存 **2.04 MiB** |
-| `DecisionEngine.step` 单步耗时（`demo`） | 20×12 m · 1 障碍 · 4 可见图角点 | `p50 = 1.18 ms` · `p95 = 1.77 ms` · `mean = 1.25 ms` · `max = 2.17 ms`（建图 `0.29 ms`） | `2 Hz` 纯核心单核 CPU **0.25%** · Python 峰值堆内存 **1.27 MiB** |
-| 纯 NumPy 策略前向推理（`BC / IQL`） | MLP `73 → 128 → 128 → 2`（`float32`） | P 核 **5.9 μs** · E 核 **16.7 μs** | 导出模型 `actor.json` **535 KB** · 零深度学习框架依赖 |
-| 纯 NumPy 策略前向推理（`Decision Transformer`） | `context=8`, 2 层因果自注意力 | P 核 **0.29 ms** (`290 μs`) · E 核 **0.73 ms** (`730 μs`) | 导出模型 `actor.json` **2.8 MB** (`2867.2 KiB`) · 零深度学习框架依赖 |
-| ROS 2 Jazzy `decision` 在线节点（`2 Hz`） | 含 `rclpy` 定时器、`WorldState` 解码、决策与 JSONL 轨迹写入 | 周期稳定 `500 ms` | 单核 CPU **3.2%–3.7%** · 常驻内存 RSS **72–80 MB** |
+| `DecisionEngine.step` 单步耗时（`rmuc2027`，含 2027 姿态/小陀螺） | 28×15 m · 77 障碍/禁区 · 149 可见图角点 | 规则 `p50 = 3.11 ms` · `p95 = 17.10 ms` · `mean = 6.74 ms`（挂载 v2 IQL：`p50 = 4.76 ms` · `p95 = 19.48 ms`） | `2 Hz`（`500 ms` 预算）纯核心单核 CPU **1.35%**（+v2 IQL **1.67%**）· 峰值堆内存 **3.70 MiB**（+v2 IQL **4.90 MiB**） |
+| `DecisionEngine.step` 单步耗时（`rmuc2026`） | 28×15 m · 62 障碍/禁区 · 113 可见图角点 | `p50 = 2.99 ms` · `p95 = 10.46 ms` · `mean = 4.54 ms` · `max = 29.29 ms`（建图 `45.14 ms`） | `2 Hz` 纯核心单核 CPU **0.91%** · Python 峰值堆内存 **2.05 MiB** |
+| `DecisionEngine.step` 单步耗时（`demo`） | 20×12 m · 1 障碍 · 4 可见图角点 | `p50 = 0.98 ms` · `p95 = 1.56 ms` · `mean = 1.06 ms` · `max = 2.17 ms`（建图 `0.28 ms`） | `2 Hz` 纯核心单核 CPU **0.21%** · Python 峰值堆内存 **1.30 MiB** |
+| 纯 NumPy 策略前向推理（`BC / IQL v2` 走位+姿态联合输出） | MLP `85 → 128 → 128 → 6`（v1 `73→2` 为 `6.4 / 17.8 μs`） | P 核 **7.0 μs** · E 核 **20.6 μs** | 导出模型 `actor.json` **575 KB**（v1 为 `535 KB`）· 零深度学习框架依赖 |
+| 纯 NumPy 策略前向推理（`Decision Transformer v2`） | `85 → 6`, `context=8`, 2 层因果自注意力 | P 核 **0.30 ms** (`297.7 μs`) · E 核 **0.73 ms** (`732.0 μs`) | 导出模型 `actor.json` **2.73 MiB** (`2790.3 KiB`) · 零深度学习框架依赖 |
+| ROS 2 Jazzy `decision` 在线节点（`2 Hz` + 受击瞬时触发） | 含 `WorldState` 解码、2027 姿态 `0x0120` / 小陀螺发布与 JSONL 轨迹 | 稳态 `2 Hz`（含每 2s 受击即发实测 `2.4 Hz`） | 单核 CPU **3.7%–4.4%** · 常驻内存 RSS **77.6–78.9 MiB** |
 
 在本机复现单步耗时基准并重新生成性能图：
 
