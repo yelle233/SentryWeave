@@ -65,7 +65,9 @@ def test_jazzy_accepts_the_holonomic_controller_configuration(tmp_path):
 
 
 @pytest.mark.parametrize("orphaned_goal", [None, "executing", "canceling"])
-def test_real_nav_action_waits_for_terminal_cancel_before_replacement(config, orphaned_goal):
+def test_real_nav_action_waits_for_terminal_cancel_before_replacement(config, orphaned_goal,
+                                                                      tmp_path):
+    import shutil
     import rclpy
     from action_msgs.msg import GoalStatus
     from geometry_msgs.msg import PoseStamped
@@ -176,8 +178,17 @@ def test_real_nav_action_waits_for_terminal_cancel_before_replacement(config, or
                 wait_for(cancel_seen.is_set)
             else:
                 release_cancel.set()
+        cfg_dir = ROOT / "src/sentry_bringup/config"
+        shutil.copyfile(cfg_dir / "field_demo.yaml", tmp_path / "field_demo.yaml")
+        tactics_tmp = tmp_path / "tactics.yaml"
+        tactics_tmp.write_text(
+            (cfg_dir / "tactics.yaml").read_text("utf-8").replace(
+                "self_timeout: 0.5", "self_timeout: 3.0"
+            ),
+            encoding="utf-8",
+        )
         runtime = ExecutorNode(namespace=namespace, parameter_overrides=[
-            Parameter("config_file", value=str(ROOT / "src/sentry_bringup/config/tactics.yaml")),
+            Parameter("config_file", value=str(tactics_tmp)),
             Parameter("action_timeout", value=3.0),
             Parameter("safety_timeout", value=3.0),
         ])
