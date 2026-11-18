@@ -127,11 +127,7 @@ def test_real_nav_action_waits_for_terminal_cancel_before_replacement(config, or
                            callback_group=group)
     navigator = ActionServer(node, NavigateToPose, "navigate_to_pose", navigate,
                              cancel_callback=lambda _: CancelResponse.ACCEPT, callback_group=group)
-    runtime = ExecutorNode(namespace=namespace, parameter_overrides=[
-        Parameter("config_file", value=str(ROOT / "src/sentry_bringup/config/tactics.yaml")),
-        Parameter("action_timeout", value=3.0),
-        Parameter("safety_timeout", value=3.0),
-    ])
+    runtime = None
     worlds = node.create_publisher(WorldState, "world/state", 1)
     tasks = node.create_publisher(TacticalTask, "tactical/task", 1)
     feedback = []
@@ -180,6 +176,11 @@ def test_real_nav_action_waits_for_terminal_cancel_before_replacement(config, or
                 wait_for(cancel_seen.is_set)
             else:
                 release_cancel.set()
+        runtime = ExecutorNode(namespace=namespace, parameter_overrides=[
+            Parameter("config_file", value=str(ROOT / "src/sentry_bringup/config/tactics.yaml")),
+            Parameter("action_timeout", value=3.0),
+            Parameter("safety_timeout", value=3.0),
+        ])
         executor.add_node(runtime)
         if orphaned_goal == "canceling":
             wait_for(lambda: runtime.startup_state in ("DRAINING", "READY"))
@@ -212,5 +213,6 @@ def test_real_nav_action_waits_for_terminal_cancel_before_replacement(config, or
             orphan_client.destroy()
         node.destroy_subscription(subscription)
         node.destroy_node()
-        runtime.destroy_node()
+        if runtime is not None:
+            runtime.destroy_node()
         rclpy.shutdown()

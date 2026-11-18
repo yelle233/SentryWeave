@@ -46,6 +46,7 @@ class ExecutorNode(Node):
         self.startup_goals = set()
         self.startup_known = set()
         self.startup_task = None
+        self.startup_world = None
         self.reported_active = {}
         self.nav_ids = {}
         self.retired_goals = set()
@@ -67,6 +68,9 @@ class ExecutorNode(Node):
         self._last_world = None
 
     def _world(self, message):
+        if self.startup_state != "READY":
+            self.startup_world = message
+            return
         now, steady = seconds(self), time.monotonic()
         try:
             world = world_from_msg(message)
@@ -78,7 +82,7 @@ class ExecutorNode(Node):
                        and safety_reason(world, self.config, self.arena) is None)
         except ValueError:
             healthy = False
-        self.machine.safety(healthy and self.startup_state == "READY", now, steady)
+        self.machine.safety(healthy, now, steady)
         self._dispatch()
 
     def _task(self, message):
@@ -211,9 +215,12 @@ class ExecutorNode(Node):
 
     def _startup_ready(self):
         self.startup_state = "READY"
-        pending, self.startup_task = self.startup_task, None
-        if pending is not None:
-            self._task(pending)
+        pending_world, self.startup_world = self.startup_world, None
+        pending_task, self.startup_task = self.startup_task, None
+        if pending_world is not None:
+            self._world(pending_world)
+        if pending_task is not None:
+            self._task(pending_task)
 
     def _startup_failed(self, reason):
         self.startup_state = "FAULT"
