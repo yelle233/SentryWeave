@@ -71,7 +71,7 @@ def test_real_nav_action_waits_for_terminal_cancel_before_replacement(config, or
     from geometry_msgs.msg import PoseStamped
     from nav2_msgs.action import ComputePathToPose, NavigateToPose
     from rclpy.action import ActionClient, ActionServer, CancelResponse
-    from rclpy.callback_groups import ReentrantCallbackGroup
+    from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
     from rclpy.parameter import Parameter
@@ -130,6 +130,7 @@ def test_real_nav_action_waits_for_terminal_cancel_before_replacement(config, or
     runtime = ExecutorNode(namespace=namespace, parameter_overrides=[
         Parameter("config_file", value=str(ROOT / "src/sentry_bringup/config/tactics.yaml")),
         Parameter("action_timeout", value=3.0),
+        Parameter("safety_timeout", value=3.0),
     ])
     worlds = node.create_publisher(WorldState, "world/state", 1)
     tasks = node.create_publisher(TacticalTask, "tactical/task", 1)
@@ -144,13 +145,13 @@ def test_real_nav_action_waits_for_terminal_cancel_before_replacement(config, or
         model.observe(Observation(7, Team.ALLY, Vec2(3, 6), now), now)
         model.update_referee(Referee(now, Phase.RUNNING, 0.9, 0.9, True, True, True))
         worlds.publish(world_to_msg(model.snapshot(now)))
-        task = Task("integration", current["id"], 1, started, now + 1.5, TaskType.DEFEND,
+        task = Task("integration", current["id"], 1, started, now + 2.0, TaskType.DEFEND,
                     "own_base", goal_id=f"point-{current['id']}",
                     goal=Vec2(4, 4 if current["id"] == 1 else 8))
         tasks.publish(task_to_msg(task, "map", now))
 
     started = node.get_clock().now().nanoseconds / 1e9
-    timer = node.create_timer(0.1, publish)
+    timer = node.create_timer(0.1, publish, callback_group=MutuallyExclusiveCallbackGroup())
     executor = MultiThreadedExecutor(num_threads=6)
     executor.add_node(node)
     worker = threading.Thread(target=executor.spin, daemon=True)
